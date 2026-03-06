@@ -1458,10 +1458,7 @@ async function getFunds() {
 
 async function getReturns() {
   const ds = await getDataset();
-  const primaryIds = new Set(
-    ds.funds.filter(isPrimaryFund).map((fund) => String(fund.id))
-  );
-  return ds.returns.filter((row) => primaryIds.has(String(row.id)));
+  return ds.returns;
 }
 
 async function getFundCompositions(forceRefresh = false) {
