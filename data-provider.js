@@ -1,0 +1,1555 @@
+const fs = require("fs/promises");
+const path = require("path");
+const cheerio = require("cheerio");
+
+const BASE_URL = process.env.DATA_SOURCE_BASE || "https://investfunds.ru";
+const CACHE_FILE =
+  process.env.DATA_CACHE_FILE ||
+  path.join(__dirname, ".cache", "fund-dashboard-data.json");
+const DATASET_VERSION = Number(process.env.DATASET_VERSION || 6);
+
+const CACHE_TTL_MS = Number(process.env.DATA_CACHE_TTL_MS || 12 * 60 * 60 * 1000);
+const REQUEST_TIMEOUT_MS = Number(process.env.DATA_REQUEST_TIMEOUT_MS || 25_000);
+const MAX_LIST_PAGES = Number(process.env.MAX_LIST_PAGES || 75);
+const LIST_CONCURRENCY = Number(process.env.LIST_CONCURRENCY || 8);
+const DETAIL_CONCURRENCY = Number(process.env.DETAIL_CONCURRENCY || 16);
+const HISTORY_BATCH_SIZE = Number(process.env.HISTORY_BATCH_SIZE || 48);
+const HISTORY_BATCH_CONCURRENCY = Number(
+  process.env.HISTORY_BATCH_CONCURRENCY || 6
+);
+const HISTORY_LOOKBACK_DAYS = Number(process.env.HISTORY_LOOKBACK_DAYS || 14);
+const TOP_GROUP_COUNT = Number(process.env.TOP_GROUP_COUNT || 9);
+const COMPOSITION_CACHE_FILE =
+  process.env.COMPOSITION_CACHE_FILE ||
+  path.join(__dirname, ".cache", "fund-compositions.json");
+const COMPOSITION_CACHE_TTL_MS = Number(
+  process.env.COMPOSITION_CACHE_TTL_MS || 24 * 60 * 60 * 1000
+);
+const COMPOSITION_CONCURRENCY = Number(process.env.COMPOSITION_CONCURRENCY || 8);
+const COMPOSITION_DATASET_VERSION = Number(
+  process.env.COMPOSITION_DATASET_VERSION || 4
+);
+
+const DATE_FMT_MSK = new Intl.DateTimeFormat("sv-SE", {
+  timeZone: "Europe/Moscow",
+});
+
+const state = {
+  dataset: null,
+  loadedAt: 0,
+  diskLoaded: false,
+  buildPromise: null,
+  compositions: null,
+  compositionsLoadedAt: 0,
+  compositionsDiskLoaded: false,
+  compositionsBuildPromise: null,
+};
+
+function datasetTimestampMs(dataset) {
+  const ts = Date.parse(dataset && dataset.generatedAt ? dataset.generatedAt : "");
+  return Number.isFinite(ts) ? ts : Date.now();
+}
+
+function normalizeSpace(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function normalizeLower(value) {
+  return normalizeSpace(value).toLowerCase();
+}
+
+function toNumber(value) {
+  if (value == null) return null;
+  const prepared = String(value)
+    .replace(/\u00A0/g, " ")
+    .replace(/\s+/g, "")
+    .replace(/,/g, ".")
+    .replace(/[^0-9.+-]/g, "");
+  if (!prepared || prepared === "-" || prepared === "+" || prepared === ".") {
+    return null;
+  }
+  const num = Number(prepared);
+  return Number.isFinite(num) ? num : null;
+}
+
+function round(value, digits = 2) {
+  if (!Number.isFinite(value)) return null;
+  const factor = 10 ** digits;
+  return Math.round(value * factor) / factor;
+}
+
+function ruDateToIso(value) {
+  const normalized = normalizeSpace(value);
+  const match = normalized.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (!match) return null;
+  return `${match[3]}-${match[2]}-${match[1]}`;
+}
+
+function isoDateToRu(value) {
+  const normalized = normalizeSpace(value);
+  const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  return `${match[3]}.${match[2]}.${match[1]}`;
+}
+
+function isoDateToUtcDate(value) {
+  return new Date(`${value}T00:00:00Z`);
+}
+
+function shiftIsoDate(value, { years = 0, months = 0, days = 0 } = {}) {
+  const d = isoDateToUtcDate(value);
+  if (years) d.setUTCFullYear(d.getUTCFullYear() + years);
+  if (months) d.setUTCMonth(d.getUTCMonth() + months);
+  if (days) d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function normalizeFundType(value) {
+  const v = normalizeLower(value);
+  if (v.includes("бирж")) return "биржевой";
+  if (v.includes("открыт")) return "открытый";
+  // Friend dashboard includes интервальные фонды in total universe (317).
+  // We map them to ОПИФ to keep the two-type UI consistent.
+  if (v.includes("интерв")) return "открытый";
+  return v || null;
+}
+
+function normalizeInvestmentType(value) {
+  const v = normalizeLower(value);
+  if (!v || v.includes("не определ")) return "Смешанный";
+  if (v.includes("акци")) return "Акции";
+  if (v.includes("облига")) return "Облигации";
+  if (v.includes("драг") || v.includes("металл") || v.includes("золото")) {
+    return "Драгметаллы";
+  }
+  if (v.includes("денеж")) return "Денежный";
+  if (v.includes("смеш")) return "Смешанный";
+  return "Смешанный";
+}
+
+function toIsoFromMs(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n)) return null;
+  return DATE_FMT_MSK.format(new Date(n));
+}
+
+function csvLikeText(value) {
+  return normalizeSpace(value).replace(/\s+/g, " ").trim();
+}
+
+function parseMaxPage($) {
+  let maxPage = 1;
+  $("a.js_pagination[href*='page=']").each((_, el) => {
+    const href = $(el).attr("href") || "";
+    const match = href.match(/page=(\d+)/);
+    if (match) {
+      const page = Number(match[1]);
+      if (Number.isFinite(page) && page > maxPage) maxPage = page;
+    }
+  });
+  return maxPage;
+}
+
+function parseListPage(html) {
+  const $ = cheerio.load(html);
+  const maxPage = parseMaxPage($);
+
+  const fixedByIndex = new Map();
+  $("tr[class*='field_fixed_']").each((_, row) => {
+    const className = $(row).attr("class") || "";
+    const match = className.match(/field_fixed_(\d+)/);
+    if (!match) return;
+    const rowIndex = match[1];
+    const link = $(row).find("td.field_name a[href*='/funds/']").first();
+    const href = link.attr("href") || "";
+    const idMatch = href.match(/\/funds\/(\d+)\//);
+    if (!idMatch) return;
+
+    const fundId = Number(idMatch[1]);
+    const fundName = csvLikeText(link.text());
+    const fundTypeRaw = csvLikeText($(row).find("td.field_name .blue").first().text());
+
+    fixedByIndex.set(rowIndex, {
+      id: fundId,
+      name: fundName,
+      detail_path: href,
+      fund_type_raw: fundTypeRaw,
+    });
+  });
+
+  const scrollByIndex = new Map();
+  $("tr[class*='field_scroll_']").each((_, row) => {
+    const className = $(row).attr("class") || "";
+    const match = className.match(/field_scroll_(\d+)/);
+    if (!match) return;
+    const rowIndex = match[1];
+    const get = (selector) =>
+      csvLikeText($(row).find(selector).first().text());
+
+    scrollByIndex.set(rowIndex, {
+      management_company: get("td.field_funds_comp_name .js_td_width"),
+      status_raw: get("td.field_funds_statuses_name .js_td_width"),
+      category_raw: get("td.field_funds_categories_title .js_td_width"),
+      investment_object_raw: get("td.field_funds_object_name .js_td_width"),
+      specialization_raw: get(
+        "td.field_funds_investing_directions_name .js_td_width"
+      ),
+      nav_date_raw: get("td.field_funds_nav_date .js_td_width"),
+      aum_mln_raw: get("td.field_nav .js_td_width"),
+    });
+  });
+
+  const rows = [];
+  for (const [idx, fixed] of fixedByIndex.entries()) {
+    const scroll = scrollByIndex.get(idx) || {};
+    rows.push({
+      ...fixed,
+      ...scroll,
+      fund_type: normalizeFundType(fixed.fund_type_raw),
+      status: normalizeLower(scroll.status_raw),
+      investment_type: normalizeInvestmentType(scroll.investment_object_raw),
+      specialization:
+        csvLikeText(scroll.specialization_raw) || csvLikeText(scroll.category_raw),
+      nav_date: ruDateToIso(scroll.nav_date_raw),
+      aum_mln: toNumber(scroll.aum_mln_raw),
+    });
+  }
+
+  return { rows, maxPage };
+}
+
+function shouldIncludeFund(row) {
+  const typeOk = row.fund_type === "открытый" || row.fund_type === "биржевой";
+  const statusOk = row.status === "сформирован";
+  return typeOk && statusOk;
+}
+
+async function fetchWithTimeout(url, options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        "user-agent": "fund-dashboard-local/1.0",
+        accept: "text/html,application/json;q=0.9,*/*;q=0.8",
+        ...(options.headers || {}),
+      },
+    });
+    return response;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchText(url, retries = 2) {
+  let lastErr;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      const response = await fetchWithTimeout(url);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} for ${url}`);
+      }
+      return await response.text();
+    } catch (error) {
+      lastErr = error;
+      if (attempt < retries) {
+        await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
+      }
+    }
+  }
+  throw lastErr;
+}
+
+async function fetchJson(url, retries = 2) {
+  let lastErr;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      const response = await fetchWithTimeout(url, {
+        headers: {
+          accept: "application/json,text/javascript,*/*;q=0.9",
+        },
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} for ${url}`);
+      }
+      const text = await response.text();
+      if (!text.trim()) return null;
+      return JSON.parse(text);
+    } catch (error) {
+      lastErr = error;
+      if (attempt < retries) {
+        await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
+      }
+    }
+  }
+  throw lastErr;
+}
+
+function normalizeHoldingName(value) {
+  let v = csvLikeText(value);
+  if (!v) return null;
+  v = v.replace(/\s*-\s*Облигации\s*\[.*$/i, "");
+  v = v.replace(/\s*,\s*акция\s*,?\s*\[.*$/i, "");
+  v = v.replace(/\s*,\s*акции\s*,?\s*\[.*$/i, "");
+  v = v.replace(/\s*\[[^\]]+\]\s*$/g, "");
+  return csvLikeText(v) || null;
+}
+
+function normalizeHoldingKey(value) {
+  const normalized = normalizeHoldingName(value);
+  return normalized ? normalized.toLowerCase().replace(/ё/g, "е") : null;
+}
+
+function parseInvestfundsStructureDate(rawText) {
+  const text = csvLikeText(rawText);
+  if (!text) return null;
+  const match = text.match(/(\d{2}\.\d{2}\.\d{4})/);
+  if (!match) return null;
+  return ruDateToIso(match[1]) || null;
+}
+
+function parseInvestfundsStructureFromHtml(html) {
+  const $ = cheerio.load(html);
+  const block = $("[data-modul='structure']").first();
+  if (!block.length) return null;
+
+  const structureDate = parseInvestfundsStructureDate(
+    block.find(".middle_ttl").first().text()
+  );
+
+  const issuers = [];
+  block.find("table tbody tr").each((_, row) => {
+    const tds = $(row).find("td");
+    if (tds.length < 2) return;
+    const nameRaw = csvLikeText($(tds[0]).text());
+    const percent = toNumber($(tds[1]).text());
+    const name = normalizeHoldingName(nameRaw);
+    if (!name || percent == null) return;
+    issuers.push({
+      name,
+      percent: round(percent, 2),
+    });
+  });
+
+  if (!issuers.length) return null;
+  return {
+    structure_date: structureDate,
+    issuers,
+  };
+}
+
+function loadPreviousCompositionItems() {
+  return fs
+    .readFile(COMPOSITION_CACHE_FILE, "utf8")
+    .then((raw) => {
+      const parsed = JSON.parse(raw);
+      return parsed && Array.isArray(parsed.items) ? parsed.items : [];
+    })
+    .catch(() => []);
+}
+
+async function fetchRankingFundIds() {
+  try {
+    const html = await fetchText(`${BASE_URL}/fund-rankings/fund-yield/`);
+    const ids = [...html.matchAll(/\/funds\/(\d+)\/?/g)]
+      .map((m) => Number(m[1]))
+      .filter((id) => Number.isFinite(id));
+    return [...new Set(ids)];
+  } catch (error) {
+    console.warn(
+      `[composition] Ranking scan failed: ${String(error.message || error)}`
+    );
+    return [];
+  }
+}
+
+function parseFundMetaFromDetailHtml(html) {
+  const $ = cheerio.load(html);
+  const header = csvLikeText($(".widget_info_ttl").first().text());
+  const parsed = parseHeaderMeta(header);
+  const infoMap = parseDetailInfoMap($);
+
+  const nameFromH1 = csvLikeText($("h1").first().text());
+  const name = parsed.name || nameFromH1 || null;
+
+  const managementCompany =
+    parsed.management_company ||
+    pickInfoValue(infoMap, ["управляющая компания", "управляющая компания:"]) ||
+    csvLikeText($(".wdgt_img_logo img").first().attr("alt")) ||
+    null;
+
+  return {
+    name,
+    management_company: managementCompany,
+  };
+}
+
+function buildHoldingMap(items) {
+  const map = new Map();
+  for (const item of items || []) {
+    const key = normalizeHoldingKey(item && item.name);
+    const percent = toNumber(item && item.percent);
+    if (!key || percent == null) continue;
+    map.set(key, {
+      name: normalizeHoldingName(item.name) || item.name,
+      percent,
+    });
+  }
+  return map;
+}
+
+function buildCompositionChanges(currentIssuers, previousIssuers, previousDate) {
+  if (!previousDate || !Array.isArray(previousIssuers) || !previousIssuers.length) {
+    return {
+      previous_date: null,
+      bought: [],
+      sold: [],
+    };
+  }
+
+  const currentMap = buildHoldingMap(currentIssuers);
+  const previousMap = buildHoldingMap(previousIssuers);
+  const keys = new Set([...currentMap.keys(), ...previousMap.keys()]);
+
+  const bought = [];
+  const sold = [];
+
+  for (const key of keys) {
+    const curr = currentMap.get(key);
+    const prev = previousMap.get(key);
+    const currentPercent = curr ? Number(curr.percent) : 0;
+    const previousPercent = prev ? Number(prev.percent) : 0;
+    const delta = round(currentPercent - previousPercent, 2);
+    if (delta == null || Math.abs(delta) < 0.01) continue;
+
+    const row = {
+      name: (curr && curr.name) || (prev && prev.name) || key,
+      delta: Math.abs(delta),
+      current: round(currentPercent, 2),
+      previous: round(previousPercent, 2),
+    };
+    if (delta > 0) bought.push(row);
+    else sold.push(row);
+  }
+
+  bought.sort((a, b) => b.delta - a.delta);
+  sold.sort((a, b) => b.delta - a.delta);
+
+  return {
+    previous_date: previousDate || null,
+    bought,
+    sold,
+  };
+}
+
+async function buildCompositionsDataset() {
+  const startedAt = Date.now();
+  console.log("[composition] Build started...");
+  const ds = await getDataset();
+  const rankingIds = await fetchRankingFundIds();
+  const candidatesById = new Map(
+    ds.funds.map((fund) => [
+      String(fund.id),
+      {
+        id: Number(fund.id),
+        name: fund.name || null,
+        management_company: fund.management_company || null,
+      },
+    ])
+  );
+  for (const id of rankingIds) {
+    const key = String(id);
+    if (candidatesById.has(key)) continue;
+    candidatesById.set(key, {
+      id,
+      name: null,
+      management_company: null,
+    });
+  }
+  const candidates = [...candidatesById.values()];
+
+  const previousItems = await loadPreviousCompositionItems();
+  const previousById = new Map(
+    previousItems
+      .filter((item) => item && item.id != null)
+      .map((item) => [String(item.id), item])
+  );
+
+  const withStructure = await mapLimit(
+    candidates,
+    COMPOSITION_CONCURRENCY,
+    async (candidate, idx) => {
+      try {
+        const html = await fetchText(`${BASE_URL}/funds/${candidate.id}/`);
+        const structure = parseInvestfundsStructureFromHtml(html);
+        if (!structure || !structure.issuers.length) return null;
+        const previous = previousById.get(String(candidate.id)) || null;
+        const parsedMeta = parseFundMetaFromDetailHtml(html);
+        const changes = buildCompositionChanges(
+          structure.issuers,
+          previous && Array.isArray(previous.issuers) ? previous.issuers : [],
+          previous ? previous.structure_date : null
+        );
+
+        return {
+          id: String(candidate.id),
+          source_id: candidate.id,
+          name: candidate.name || parsedMeta.name || `Фонд ${candidate.id}`,
+          management_company:
+            candidate.management_company || parsedMeta.management_company || null,
+          structure_date: structure.structure_date || null,
+          issuers: structure.issuers,
+          changes,
+        };
+      } catch (error) {
+        console.warn(
+          `[composition] Structure parse failed for ${candidate.id}: ${String(
+            error.message || error
+          )}`
+        );
+        return null;
+      } finally {
+        if ((idx + 1) % 20 === 0 || idx + 1 === candidates.length) {
+          console.log(
+            `[composition] Parsed ${Math.min(idx + 1, candidates.length)}/${candidates.length}`
+          );
+        }
+      }
+    },
+    { continueOnError: true }
+  );
+
+  const items = withStructure
+    .filter(Boolean)
+    .sort((a, b) => a.name.localeCompare(b.name, "ru"));
+
+  const dataset = {
+    version: COMPOSITION_DATASET_VERSION,
+    source: `${BASE_URL} + /fund-rankings/fund-yield/`,
+    generatedAt: new Date().toISOString(),
+    fundUniverse: candidates.length,
+    items,
+  };
+
+  await fs.mkdir(path.dirname(COMPOSITION_CACHE_FILE), { recursive: true });
+  await fs.writeFile(COMPOSITION_CACHE_FILE, JSON.stringify(dataset), "utf8");
+
+  const sec = ((Date.now() - startedAt) / 1000).toFixed(1);
+  console.log(
+    `[composition] Build finished in ${sec}s. Items: ${items.length}. Cache: ${COMPOSITION_CACHE_FILE}`
+  );
+  return dataset;
+}
+
+async function mapLimit(items, limit, worker, { continueOnError = false } = {}) {
+  if (!items.length) return [];
+  const capped = Math.max(1, Math.min(limit, items.length));
+  const results = new Array(items.length);
+  let cursor = 0;
+  let fatalError = null;
+
+  const workers = Array.from({ length: capped }, async () => {
+    while (true) {
+      if (fatalError) break;
+      const i = cursor;
+      cursor += 1;
+      if (i >= items.length) break;
+      try {
+        results[i] = await worker(items[i], i);
+      } catch (error) {
+        if (continueOnError) {
+          results[i] = null;
+          continue;
+        }
+        fatalError = error;
+        break;
+      }
+    }
+  });
+
+  await Promise.all(workers);
+  if (fatalError) throw fatalError;
+  return results;
+}
+
+function chunkArray(items, chunkSize) {
+  const size = Math.max(1, Number(chunkSize) || 1);
+  const chunks = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
+
+function parseHeaderMeta(header) {
+  const normalized = csvLikeText(header);
+  if (!normalized) {
+    return { name: null, management_company: null, fund_id: null, ticker: null };
+  }
+
+  const nameMatch = normalized.match(/^(.*?)\s*\(([^)]+)\)/);
+  let name = null;
+  let managementCompany = null;
+  if (nameMatch) {
+    name = csvLikeText(nameMatch[1]);
+    managementCompany = csvLikeText(nameMatch[2]);
+  }
+
+  const segments = normalized.split(",").map((s) => csvLikeText(s));
+  let fundId = null;
+  let ticker = null;
+
+  for (const segment of segments) {
+    if (!fundId && /^\d[\dA-ZА-ЯЁa-zа-яё\-./\s]{2,}$/.test(segment)) {
+      fundId = segment.replace(/\s+/g, "");
+      continue;
+    }
+    if (!ticker && /^[A-Z0-9.-]{2,20}$/.test(segment)) {
+      ticker = segment;
+    }
+  }
+
+  return {
+    name: name || null,
+    management_company: managementCompany || null,
+    fund_id: fundId,
+    ticker: ticker || null,
+  };
+}
+
+function pickInfoValue(infoMap, keys) {
+  for (const key of keys) {
+    const value = infoMap.get(key);
+    if (value) return value;
+  }
+  return null;
+}
+
+function buildFallbackFundMeta(row) {
+  return {
+    id: row.id,
+    source_id: row.id,
+    ticker: null,
+    fund_id: null,
+    name: row.name || null,
+    isin: null,
+    management_company: row.management_company || null,
+    fund_type: row.fund_type || "открытый",
+    investment_type: row.investment_type || "Смешанный",
+    specialization: row.specialization || row.category_raw || null,
+    universe_source: row.universe_source || "main",
+    cbonds_id: row.id,
+  };
+}
+
+function parseDetailInfoMap($) {
+  const info = new Map();
+  $("[data-modul='info'] .item").each((_, el) => {
+    const key = normalizeLower($(el).find(".name").first().text());
+    const val = csvLikeText($(el).find(".value").first().text());
+    if (key) info.set(key, val || null);
+  });
+  return info;
+}
+
+async function fetchFundDetails(row) {
+  const url = `${BASE_URL}/funds/${row.id}/`;
+  const html = await fetchText(url);
+  const $ = cheerio.load(html);
+
+  const header = csvLikeText($(".widget_info_ttl").first().text());
+  const parsed = parseHeaderMeta(header);
+  const infoMap = parseDetailInfoMap($);
+
+  const ticker =
+    pickInfoValue(infoMap, ["тикер", "биржевой тикер"]) || parsed.ticker || null;
+  const isin = pickInfoValue(infoMap, ["isin", "код isin"]) || null;
+  const fundId =
+    pickInfoValue(infoMap, [
+      "номер регистрации",
+      "регистрационный номер",
+      "номер регистрации правил",
+    ]) ||
+    parsed.fund_id ||
+    null;
+
+  const managementCompany =
+    row.management_company ||
+    parsed.management_company ||
+    csvLikeText($(".wdgt_img_logo img").first().attr("alt")) ||
+    null;
+
+  const name = row.name || parsed.name || null;
+
+  const specialization =
+    row.specialization ||
+    infoMap.get("инвестиционная стратегия") ||
+    infoMap.get("специализация") ||
+    row.category_raw ||
+    null;
+
+  const fundTypeFromInfo = normalizeFundType(
+    pickInfoValue(infoMap, ["тип фонда", "тип пиф", "вид фонда", "тип"]) || ""
+  );
+  const investmentTypeFromInfo = normalizeInvestmentType(
+    pickInfoValue(infoMap, [
+      "объект инвестирования",
+      "тип активов",
+      "инвестиционная стратегия",
+      "категория",
+      "категория фонда",
+    ]) || ""
+  );
+
+  return {
+    id: row.id,
+    source_id: row.id,
+    ticker,
+    fund_id: fundId,
+    name,
+    isin,
+    management_company: managementCompany,
+    fund_type: row.fund_type || fundTypeFromInfo || "открытый",
+    investment_type: row.investment_type || investmentTypeFromInfo || "Смешанный",
+    specialization,
+    universe_source: row.universe_source || "main",
+    cbonds_id: row.id,
+  };
+}
+
+function parseChartSeries(rawSeries) {
+  const map = new Map();
+  for (const point of rawSeries || []) {
+    if (!Array.isArray(point) || point.length < 2) continue;
+    const date = toIsoFromMs(point[0]);
+    const value = toNumber(point[1]);
+    if (!date || value == null) continue;
+    map.set(date, value);
+  }
+  return [...map.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([time, value]) => ({ time, value }));
+}
+
+function buildChartUrl(fundIds, dataKey, dateFrom = "01.01.1990") {
+  const routeFundId = fundIds[0];
+  const params = new URLSearchParams();
+  params.set("action", "chartData");
+  params.set("data_key", dataKey);
+  params.set("date_from", dateFrom);
+  params.set("currencyId", "1");
+  for (const id of fundIds) {
+    params.append("ids[]", String(id));
+  }
+  return `${BASE_URL}/funds/${routeFundId}/?${params.toString()}`;
+}
+
+async function fetchFundSeriesBatch(
+  fundIds,
+  dataKey,
+  { dateFrom = "01.01.1990" } = {}
+) {
+  const out = {};
+  for (const id of fundIds) {
+    out[String(id)] = [];
+  }
+
+  if (!fundIds.length) return out;
+
+  const url = buildChartUrl(fundIds, dataKey, dateFrom);
+  const payload = await fetchJson(url);
+  const blocks = Array.isArray(payload)
+    ? payload
+    : payload && Array.isArray(payload.data)
+      ? [payload]
+      : [];
+
+  if (blocks.length !== fundIds.length) {
+    console.warn(
+      `[data] Batch mismatch for ${dataKey}: requested=${fundIds.length}, got=${blocks.length}. Fallback to single requests.`
+    );
+    for (const fundId of fundIds) {
+      const singlePayload = await fetchJson(buildChartUrl([fundId], dataKey, dateFrom));
+      const singleBlocks = Array.isArray(singlePayload)
+        ? singlePayload
+        : singlePayload && Array.isArray(singlePayload.data)
+          ? [singlePayload]
+          : [];
+      const singleRaw = singleBlocks[0] && Array.isArray(singleBlocks[0].data)
+        ? singleBlocks[0].data
+        : [];
+      out[String(fundId)] = parseChartSeries(singleRaw);
+    }
+    return out;
+  }
+
+  for (let i = 0; i < fundIds.length; i += 1) {
+    const fundId = fundIds[i];
+    const block = blocks[i];
+    const rawSeries = block && Array.isArray(block.data) ? block.data : [];
+    out[String(fundId)] = parseChartSeries(rawSeries);
+  }
+  return out;
+}
+
+function mergeFundSeries(paySeries, scaSeries) {
+  const byDate = new Map();
+  for (const p of paySeries) {
+    if (!byDate.has(p.time)) byDate.set(p.time, { time: p.time });
+    byDate.get(p.time).nav = p.value;
+  }
+  for (const p of scaSeries) {
+    if (!byDate.has(p.time)) byDate.set(p.time, { time: p.time });
+    byDate.get(p.time).aum = p.value;
+  }
+
+  const rows = [...byDate.values()].sort((a, b) => a.time.localeCompare(b.time));
+
+  let prevShares = null;
+  let prevAum = null;
+  const merged = [];
+
+  for (const row of rows) {
+    const nav = row.nav != null ? Number(row.nav) : null;
+    const aum = row.aum != null ? Number(row.aum) : null;
+
+    let shares = null;
+    if (nav != null && nav > 0 && aum != null) {
+      shares = aum / nav;
+    }
+
+    let flow = null;
+    if (shares != null && prevShares != null && nav != null) {
+      flow = (shares - prevShares) * nav;
+    } else if (aum != null && prevAum != null) {
+      flow = aum - prevAum;
+    }
+
+    merged.push({
+      time: row.time,
+      nav: nav != null ? round(nav, 6) : null,
+      aum: aum != null ? round(aum, 2) : null,
+      shares: shares != null ? round(shares, 2) : null,
+      flow: flow != null ? round(flow, 2) : null,
+    });
+
+    if (shares != null) prevShares = shares;
+    if (aum != null) prevAum = aum;
+  }
+
+  return merged;
+}
+
+function mergeValueSeries(existingSeries, freshSeries) {
+  const byDate = new Map();
+  for (const point of existingSeries || []) {
+    if (!point || !point.time || point.value == null) continue;
+    byDate.set(point.time, point.value);
+  }
+  for (const point of freshSeries || []) {
+    if (!point || !point.time || point.value == null) continue;
+    byDate.set(point.time, point.value);
+  }
+  return [...byDate.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([time, value]) => ({ time, value }));
+}
+
+function extractSeriesFromHistory(history, key) {
+  if (!Array.isArray(history) || !history.length) return [];
+  return history
+    .filter((point) => point && point.time && point[key] != null)
+    .map((point) => ({ time: point.time, value: point[key] }));
+}
+
+function mergeHistoryIncremental(previousHistory, freshPaySeries, freshScaSeries) {
+  if (!Array.isArray(previousHistory) || !previousHistory.length) {
+    return mergeFundSeries(freshPaySeries, freshScaSeries);
+  }
+  const previousPay = extractSeriesFromHistory(previousHistory, "nav");
+  const previousSca = extractSeriesFromHistory(previousHistory, "aum");
+  const paySeries = mergeValueSeries(previousPay, freshPaySeries);
+  const scaSeries = mergeValueSeries(previousSca, freshScaSeries);
+  return mergeFundSeries(paySeries, scaSeries);
+}
+
+function historyLastDate(history) {
+  if (!Array.isArray(history) || !history.length) return null;
+  return history[history.length - 1].time || null;
+}
+
+function batchDateFrom(batchFundIds, previousHistoriesById) {
+  let earliestIso = null;
+  for (const fundId of batchFundIds) {
+    const history = previousHistoriesById[String(fundId)] || [];
+    const lastDate = historyLastDate(history);
+    if (!lastDate || !/^\d{4}-\d{2}-\d{2}$/.test(lastDate)) return "01.01.1990";
+    const lookbackDate = shiftIsoDate(lastDate, { days: -HISTORY_LOOKBACK_DAYS });
+    if (!earliestIso || lookbackDate < earliestIso) earliestIso = lookbackDate;
+  }
+  return isoDateToRu(earliestIso) || "01.01.1990";
+}
+
+function findLastWithNav(history) {
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    if (history[i].nav != null) return history[i];
+  }
+  return null;
+}
+
+function findNavOnOrBefore(history, targetIsoDate) {
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const point = history[i];
+    if (point.time <= targetIsoDate && point.nav != null) return point.nav;
+  }
+  return null;
+}
+
+function computeReturn(history, lastDate, period) {
+  let targetDate = null;
+  switch (period) {
+    case "1m":
+      targetDate = shiftIsoDate(lastDate, { months: -1 });
+      break;
+    case "3m":
+      targetDate = shiftIsoDate(lastDate, { months: -3 });
+      break;
+    case "6m":
+      targetDate = shiftIsoDate(lastDate, { months: -6 });
+      break;
+    case "ytd": {
+      const year = isoDateToUtcDate(lastDate).getUTCFullYear();
+      targetDate = `${year}-01-01`;
+      break;
+    }
+    case "1y":
+      targetDate = shiftIsoDate(lastDate, { years: -1 });
+      break;
+    case "3y":
+      targetDate = shiftIsoDate(lastDate, { years: -3 });
+      break;
+    case "5y":
+      targetDate = shiftIsoDate(lastDate, { years: -5 });
+      break;
+    default:
+      return null;
+  }
+
+  const endNav = findNavOnOrBefore(history, lastDate);
+  const startNav = findNavOnOrBefore(history, targetDate);
+  if (endNav == null || startNav == null || startNav <= 0) return null;
+  return round(((endNav / startNav) - 1) * 100, 4);
+}
+
+function buildReturnsRow(fundMeta, history) {
+  const last = findLastWithNav(history);
+  const lastAum = [...history].reverse().find((p) => p.aum != null) || null;
+  const lastDate = (last || lastAum || {}).time || null;
+
+  if (!lastDate) {
+    return {
+      id: fundMeta.id,
+      ticker: fundMeta.ticker,
+      fund_id: fundMeta.fund_id,
+      name: fundMeta.name,
+      mc: fundMeta.management_company,
+      fund_type: fundMeta.fund_type,
+      inv_type: fundMeta.investment_type,
+      spec: fundMeta.specialization,
+      nav: null,
+      aum: null,
+      date: null,
+      "1m": null,
+      "3m": null,
+      "6m": null,
+      ytd: null,
+      "1y": null,
+      "3y": null,
+      "5y": null,
+    };
+  }
+
+  const latestNav = findNavOnOrBefore(history, lastDate);
+  const latestAumPoint = [...history].reverse().find((p) => p.time <= lastDate && p.aum != null);
+  const latestAum = latestAumPoint ? latestAumPoint.aum : null;
+
+  return {
+    id: fundMeta.id,
+    ticker: fundMeta.ticker,
+    fund_id: fundMeta.fund_id,
+    name: fundMeta.name,
+    mc: fundMeta.management_company,
+    fund_type: fundMeta.fund_type,
+    inv_type: fundMeta.investment_type,
+    spec: fundMeta.specialization,
+    nav: latestNav != null ? round(latestNav, 6) : null,
+    aum: latestAum != null ? round(latestAum, 2) : null,
+    date: lastDate,
+    "1m": computeReturn(history, lastDate, "1m"),
+    "3m": computeReturn(history, lastDate, "3m"),
+    "6m": computeReturn(history, lastDate, "6m"),
+    ytd: computeReturn(history, lastDate, "ytd"),
+    "1y": computeReturn(history, lastDate, "1y"),
+    "3y": computeReturn(history, lastDate, "3y"),
+    "5y": computeReturn(history, lastDate, "5y"),
+  };
+}
+
+function getLatestAum(history) {
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    if (history[i].aum != null) return history[i].aum;
+  }
+  return 0;
+}
+
+function buildTimeseriesForGroups(funds, historiesById, getGroupName) {
+  const dateSet = new Set();
+  for (const fund of funds) {
+    const history = historiesById[String(fund.id)] || [];
+    for (const p of history) {
+      if (p.aum != null || p.flow != null) dateSet.add(p.time);
+    }
+  }
+
+  const dates = [...dateSet].sort((a, b) => a.localeCompare(b));
+  const index = new Map(dates.map((d, i) => [d, i]));
+  const data = {};
+
+  for (const fund of funds) {
+    const history = historiesById[String(fund.id)] || [];
+    const groupName = getGroupName(fund);
+    if (!groupName) continue;
+
+    if (!data[groupName]) {
+      data[groupName] = {
+        aum: new Array(dates.length).fill(0),
+        flow: new Array(dates.length).fill(0),
+      };
+    }
+
+    const aumByDate = new Map();
+    for (const point of history) {
+      if (point.aum != null) aumByDate.set(point.time, point.aum);
+    }
+    let lastAum = null;
+    for (let i = 0; i < dates.length; i += 1) {
+      const date = dates[i];
+      if (aumByDate.has(date)) lastAum = aumByDate.get(date);
+      if (lastAum != null) data[groupName].aum[i] += lastAum;
+    }
+
+    for (const point of history) {
+      const idx = index.get(point.time);
+      if (idx == null) continue;
+      if (point.flow != null) data[groupName].flow[idx] += point.flow;
+    }
+  }
+
+  return { dates, data };
+}
+
+function parseFundTypeQuery(raw) {
+  const q = normalizeLower(raw || "all");
+  if (!q || q === "all") return new Set(["открытый", "биржевой"]);
+  const set = new Set();
+  if (q.includes("opif")) set.add("открытый");
+  if (q.includes("bpif")) set.add("биржевой");
+  if (!set.size) {
+    set.add("открытый");
+    set.add("биржевой");
+  }
+  return set;
+}
+
+function filterByFundType(funds, rawFundType) {
+  const allowed = parseFundTypeQuery(rawFundType);
+  return funds.filter((f) => allowed.has(f.fund_type));
+}
+
+function isPrimaryFund(fund) {
+  return String(fund && fund.universe_source ? fund.universe_source : "main") !==
+    "ranking-extra";
+}
+
+function pickTopGroupsByAum(funds, historiesById, groupKeySelector, topN = TOP_GROUP_COUNT) {
+  const sums = new Map();
+  for (const fund of funds) {
+    const key = groupKeySelector(fund);
+    if (!key) continue;
+    const latest = getLatestAum(historiesById[String(fund.id)] || []);
+    sums.set(key, (sums.get(key) || 0) + latest);
+  }
+  return [...sums.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, topN)
+    .map(([key]) => key);
+}
+
+async function buildDataset() {
+  const startedAt = Date.now();
+  console.log("[data] Build started...");
+
+  const firstHtml = await fetchText(`${BASE_URL}/funds/?showID=54&limit=50&page=1`);
+  const firstParsed = parseListPage(firstHtml);
+  const maxPage = Math.min(firstParsed.maxPage || 1, MAX_LIST_PAGES);
+  console.log(`[data] List pages: ${maxPage}`);
+
+  const rawRows = [...firstParsed.rows];
+  const pages = Array.from({ length: Math.max(0, maxPage - 1) }, (_, i) => i + 2);
+  if (pages.length) {
+    const pageRows = await mapLimit(
+      pages,
+      LIST_CONCURRENCY,
+      async (page, i) => {
+        const html = await fetchText(
+          `${BASE_URL}/funds/?showID=54&limit=50&page=${page}`
+        );
+        const parsed = parseListPage(html);
+        if ((i + 1) % 10 === 0 || i + 1 === pages.length) {
+          console.log(`[data] Parsed list page ${page}/${maxPage}`);
+        }
+        return parsed.rows;
+      }
+    );
+    for (const rows of pageRows) {
+      if (Array.isArray(rows)) rawRows.push(...rows);
+    }
+  }
+
+  const byId = new Map();
+  for (const row of rawRows) {
+    if (!row.id) continue;
+    if (!byId.has(row.id)) byId.set(row.id, row);
+  }
+  const uniqueRows = [...byId.values()];
+  console.log(`[data] Funds in source list: ${uniqueRows.length}`);
+
+  const selectedRows = uniqueRows
+    .filter(shouldIncludeFund)
+    .map((row) => ({ ...row, universe_source: "main" }));
+  console.log(`[data] Selected open/exchange + formed: ${selectedRows.length}`);
+
+  const rankingIds = await fetchRankingFundIds();
+  const selectedById = new Map(selectedRows.map((row) => [String(row.id), row]));
+  let rankingAdded = 0;
+  for (const id of rankingIds) {
+    const key = String(id);
+    if (selectedById.has(key)) continue;
+    selectedById.set(key, {
+      id,
+      name: null,
+      detail_path: `/funds/${id}/`,
+      fund_type_raw: null,
+      management_company: null,
+      status_raw: "сформирован",
+      category_raw: null,
+      investment_object_raw: null,
+      specialization_raw: null,
+      nav_date_raw: null,
+      aum_mln_raw: null,
+      fund_type: "открытый",
+      status: "сформирован",
+      investment_type: "Смешанный",
+      specialization: null,
+      universe_source: "ranking-extra",
+      nav_date: null,
+      aum_mln: null,
+    });
+    rankingAdded += 1;
+  }
+  const candidateRows = [...selectedById.values()];
+  console.log(`[data] Added from ranking scan: ${rankingAdded}`);
+  console.log(`[data] Total candidates for details: ${candidateRows.length}`);
+
+  const previousFunds =
+    state.dataset && Array.isArray(state.dataset.funds) ? state.dataset.funds : [];
+  const previousHistoriesById =
+    state.dataset && state.dataset.historiesById ? state.dataset.historiesById : {};
+  const previousById = new Map(previousFunds.map((f) => [f.id, f]));
+  let detailFetchedCount = 0;
+  let detailReusedCount = 0;
+
+  const detailed = await mapLimit(
+    candidateRows,
+    DETAIL_CONCURRENCY,
+    async (row, i) => {
+      const previous = previousById.get(row.id);
+      if (previous && (previous.ticker || previous.fund_id || previous.isin)) {
+        detailReusedCount += 1;
+        return {
+          ...buildFallbackFundMeta(row),
+          ticker: previous.ticker || null,
+          fund_id: previous.fund_id || null,
+          name: row.name || previous.name || null,
+          isin: previous.isin || null,
+          management_company:
+            row.management_company || previous.management_company || null,
+          specialization:
+            row.specialization || previous.specialization || row.category_raw || null,
+        };
+      }
+
+      let meta = null;
+      try {
+        meta = await fetchFundDetails(row);
+        detailFetchedCount += 1;
+      } catch (error) {
+        console.warn(
+          `[data] Fund card parse failed for ${row.id}: ${String(
+            error.message || error
+          )}`
+        );
+        meta = buildFallbackFundMeta(row);
+      }
+      if ((i + 1) % 25 === 0 || i + 1 === candidateRows.length) {
+        console.log(`[data] Parsed fund card ${i + 1}/${candidateRows.length}`);
+      }
+      return meta;
+    }
+  );
+
+  const funds = detailed.filter(Boolean);
+  console.log(`[data] Detailed funds: ${funds.length}`);
+  console.log(
+    `[data] Fund cards fetched: ${detailFetchedCount}, reused from cache: ${detailReusedCount}`
+  );
+
+  const historiesById = {};
+  const fundById = new Map(funds.map((fund) => [fund.id, fund]));
+  const fundIdsWithHistory = [];
+  const fundIdsWithoutHistory = [];
+  for (const fund of funds) {
+    const prevHistory = previousHistoriesById[String(fund.id)] || [];
+    if (prevHistory.length) {
+      fundIdsWithHistory.push(fund.id);
+    } else {
+      fundIdsWithoutHistory.push(fund.id);
+    }
+  }
+  const batches = [
+    ...chunkArray(fundIdsWithHistory, HISTORY_BATCH_SIZE),
+    ...chunkArray(fundIdsWithoutHistory, HISTORY_BATCH_SIZE),
+  ];
+  console.log(
+    `[data] History mode: incremental=${fundIdsWithHistory.length}, full=${fundIdsWithoutHistory.length}`
+  );
+  let loadedFunds = 0;
+
+  await mapLimit(
+    batches,
+    HISTORY_BATCH_CONCURRENCY,
+    async (batchFundIds, batchIndex) => {
+      const dateFrom = batchDateFrom(batchFundIds, previousHistoriesById);
+      const [payById, scaById] = await Promise.all([
+        fetchFundSeriesBatch(batchFundIds, "pay", { dateFrom }),
+        fetchFundSeriesBatch(batchFundIds, "sca", { dateFrom }),
+      ]);
+
+      for (const fundId of batchFundIds) {
+        const paySeries = payById[String(fundId)] || [];
+        const scaSeries = scaById[String(fundId)] || [];
+        const previousHistory = previousHistoriesById[String(fundId)] || [];
+        const history = mergeHistoryIncremental(previousHistory, paySeries, scaSeries);
+        historiesById[String(fundId)] = history;
+
+        const fund = fundById.get(fundId);
+        if (!fund) continue;
+
+        const last = findLastWithNav(history);
+        const lastAumPoint = [...history].reverse().find((p) => p.aum != null) || null;
+        fund.latest_nav = last ? last.nav : null;
+        fund.latest_aum = lastAumPoint ? lastAumPoint.aum : null;
+        fund.latest_date = (last || lastAumPoint || {}).time || null;
+      }
+
+      loadedFunds += batchFundIds.length;
+      console.log(
+        `[data] Loaded history batch ${batchIndex + 1}/${batches.length} (${Math.min(
+          loadedFunds,
+          funds.length
+        )}/${funds.length})`
+      );
+    }
+  );
+
+  const returns = funds.map((fund) =>
+    buildReturnsRow(fund, historiesById[String(fund.id)] || [])
+  );
+
+  const dataset = {
+    version: DATASET_VERSION,
+    source: BASE_URL,
+    generatedAt: new Date().toISOString(),
+    funds,
+    returns,
+    historiesById,
+  };
+
+  await fs.mkdir(path.dirname(CACHE_FILE), { recursive: true });
+  await fs.writeFile(CACHE_FILE, JSON.stringify(dataset), "utf8");
+
+  const sec = ((Date.now() - startedAt) / 1000).toFixed(1);
+  console.log(`[data] Build finished in ${sec}s. Cache: ${CACHE_FILE}`);
+  return dataset;
+}
+
+function isValidMainDataset(data) {
+  return Boolean(
+    data &&
+      Number(data.version) === DATASET_VERSION &&
+      Array.isArray(data.funds) &&
+      Array.isArray(data.returns) &&
+      data.historiesById &&
+      typeof data.historiesById === "object"
+  );
+}
+
+async function ensureDiskLoaded() {
+  if (state.diskLoaded) return;
+  state.diskLoaded = true;
+  try {
+    const raw = await fs.readFile(CACHE_FILE, "utf8");
+    const data = JSON.parse(raw);
+    if (isValidMainDataset(data)) {
+      state.dataset = data;
+      state.loadedAt = datasetTimestampMs(data);
+      console.log(`[data] Loaded cache from disk (${CACHE_FILE})`);
+    }
+  } catch {
+    // Cache file may not exist on first run
+  }
+}
+
+async function getDataset() {
+  await ensureDiskLoaded();
+
+  if (state.dataset) {
+    const isStale = Date.now() - state.loadedAt > CACHE_TTL_MS;
+    if (isStale && !state.buildPromise) {
+      state.buildPromise = buildDataset()
+        .then((data) => {
+          state.dataset = data;
+          state.loadedAt = datasetTimestampMs(data);
+          return data;
+        })
+        .finally(() => {
+          state.buildPromise = null;
+        });
+    }
+    return state.dataset;
+  }
+
+  if (!state.buildPromise) {
+    state.buildPromise = buildDataset()
+      .then((data) => {
+        state.dataset = data;
+        state.loadedAt = datasetTimestampMs(data);
+        return data;
+      })
+      .finally(() => {
+        state.buildPromise = null;
+      });
+  }
+
+  return state.buildPromise;
+}
+
+function isValidCompositionDataset(data) {
+  return Boolean(
+    data &&
+      Number(data.version) === COMPOSITION_DATASET_VERSION &&
+      Array.isArray(data.items)
+  );
+}
+
+async function ensureCompositionDiskLoaded() {
+  if (state.compositionsDiskLoaded) return;
+  state.compositionsDiskLoaded = true;
+  try {
+    const raw = await fs.readFile(COMPOSITION_CACHE_FILE, "utf8");
+    const data = JSON.parse(raw);
+    if (isValidCompositionDataset(data)) {
+      state.compositions = data;
+      state.compositionsLoadedAt = datasetTimestampMs(data);
+      console.log(
+        `[composition] Loaded cache from disk (${COMPOSITION_CACHE_FILE})`
+      );
+    }
+  } catch {
+    // Cache file may not exist on first run
+  }
+}
+
+async function getCompositionsDataset({ forceRefresh = false } = {}) {
+  await ensureCompositionDiskLoaded();
+
+  if (forceRefresh) {
+    if (!state.compositionsBuildPromise) {
+      state.compositionsBuildPromise = buildCompositionsDataset()
+        .then((data) => {
+          state.compositions = data;
+          state.compositionsLoadedAt = datasetTimestampMs(data);
+          return data;
+        })
+        .finally(() => {
+          state.compositionsBuildPromise = null;
+        });
+    }
+    return state.compositionsBuildPromise;
+  }
+
+  if (state.compositions) {
+    const isStale = Date.now() - state.compositionsLoadedAt > COMPOSITION_CACHE_TTL_MS;
+    if (isStale && !state.compositionsBuildPromise) {
+      state.compositionsBuildPromise = buildCompositionsDataset()
+        .then((data) => {
+          state.compositions = data;
+          state.compositionsLoadedAt = datasetTimestampMs(data);
+          return data;
+        })
+        .finally(() => {
+          state.compositionsBuildPromise = null;
+        });
+    }
+    return state.compositions;
+  }
+
+  if (!state.compositionsBuildPromise) {
+    state.compositionsBuildPromise = buildCompositionsDataset()
+      .then((data) => {
+        state.compositions = data;
+        state.compositionsLoadedAt = datasetTimestampMs(data);
+        return data;
+      })
+      .finally(() => {
+        state.compositionsBuildPromise = null;
+      });
+  }
+
+  return state.compositionsBuildPromise;
+}
+
+function filterHistoryByRange(history, from, to) {
+  if (!from && !to) return history;
+  return history.filter((p) => {
+    if (from && p.time < from) return false;
+    if (to && p.time > to) return false;
+    return true;
+  });
+}
+
+async function getFunds() {
+  const ds = await getDataset();
+  return ds.funds.map((f) => ({
+    id: f.id,
+    ticker: f.ticker || null,
+    fund_id: f.fund_id || null,
+    name: f.name,
+    isin: f.isin || null,
+    management_company: f.management_company || null,
+    fund_type: f.fund_type,
+    investment_type: f.investment_type,
+    specialization: f.specialization || null,
+    cbonds_id: f.cbonds_id || f.id,
+  }));
+}
+
+async function getReturns() {
+  const ds = await getDataset();
+  const primaryIds = new Set(
+    ds.funds.filter(isPrimaryFund).map((fund) => String(fund.id))
+  );
+  return ds.returns.filter((row) => primaryIds.has(String(row.id)));
+}
+
+async function getFundCompositions(forceRefresh = false) {
+  const ds = await getCompositionsDataset({ forceRefresh });
+  return ds.items;
+}
+
+async function getNavByFundId(fundId, from, to) {
+  const ds = await getDataset();
+  const history = ds.historiesById[String(fundId)];
+  if (!history) return null;
+  return filterHistoryByRange(history, from, to);
+}
+
+async function getMarketData(rawFundType) {
+  const ds = await getDataset();
+  const primaryFunds = ds.funds.filter(isPrimaryFund);
+  const filteredFunds = filterByFundType(primaryFunds, rawFundType);
+
+  const byType = buildTimeseriesForGroups(
+    filteredFunds,
+    ds.historiesById,
+    (f) => f.investment_type || "Смешанный"
+  );
+
+  const topMCs = pickTopGroupsByAum(
+    filteredFunds,
+    ds.historiesById,
+    (f) => f.management_company || "Прочие"
+  );
+  const topSet = new Set(topMCs);
+
+  const byMC = buildTimeseriesForGroups(
+    filteredFunds,
+    ds.historiesById,
+    (f) => {
+      const mc = f.management_company || "Прочие";
+      return topSet.has(mc) ? mc : "Прочие";
+    }
+  );
+
+  return { byType, byMC, topMCs };
+}
+
+async function getMCDetail(mcName, rawFundType) {
+  const ds = await getDataset();
+  const selectedMc = normalizeSpace(mcName || "");
+  if (!selectedMc) {
+    return { byType: { dates: [], data: {} }, byFund: { dates: [], data: {} }, topFundNames: [] };
+  }
+
+  const primaryFunds = ds.funds.filter(isPrimaryFund);
+  const filteredByType = filterByFundType(primaryFunds, rawFundType);
+  const mcFunds = filteredByType.filter(
+    (f) => normalizeSpace(f.management_company) === selectedMc
+  );
+
+  const byType = buildTimeseriesForGroups(
+    mcFunds,
+    ds.historiesById,
+    (f) => f.investment_type || "Смешанный"
+  );
+
+  const topFundNames = [...mcFunds]
+    .map((f) => ({
+      name: f.name,
+      aum: getLatestAum(ds.historiesById[String(f.id)] || []),
+    }))
+    .sort((a, b) => b.aum - a.aum)
+    .slice(0, TOP_GROUP_COUNT)
+    .map((x) => x.name);
+
+  const topSet = new Set(topFundNames);
+  const byFund = buildTimeseriesForGroups(
+    mcFunds,
+    ds.historiesById,
+    (f) => (topSet.has(f.name) ? f.name : "Прочие")
+  );
+
+  return { byType, byFund, topFundNames };
+}
+
+module.exports = {
+  getDataset,
+  getFunds,
+  getReturns,
+  getFundCompositions,
+  getNavByFundId,
+  getMarketData,
+  getMCDetail,
+};

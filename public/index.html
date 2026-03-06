@@ -1,0 +1,2458 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fund Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
+<script src="https://unpkg.com/lightweight-charts@5/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+/* ============================================================
+   CSS VARIABLES & RESET
+   ============================================================ */
+:root {
+  --bg-primary: #1a1a2e;
+  --bg-secondary: #16213e;
+  --bg-card: #0f3460;
+  --bg-table-row: #1e2d4d;
+  --bg-table-hover: #243555;
+  --text-primary: #e0e0e0;
+  --text-secondary: #8a8aaa;
+  --accent: #4fc3f7;
+  --accent-hover: #81d4fa;
+  --border: #2a3a5c;
+  --green: #26a69a;
+  --red: #ef5350;
+  --grid-color: rgba(42,58,92,0.5);
+  --tab-active-bg: #4fc3f7;
+  --tab-active-text: #fff;
+}
+[data-theme="light"] {
+  --bg-primary: #f0f2f5;
+  --bg-secondary: #ffffff;
+  --bg-card: #e8eaf6;
+  --bg-table-row: #f8f9fa;
+  --bg-table-hover: #e8edf2;
+  --text-primary: #212121;
+  --text-secondary: #757575;
+  --accent: #1976d2;
+  --accent-hover: #1565c0;
+  --border: #dde0e4;
+  --green: #2e7d32;
+  --red: #c62828;
+  --grid-color: rgba(0,0,0,0.06);
+  --tab-active-bg: #1976d2;
+  --tab-active-text: #fff;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ============================================================
+   TOP NAVIGATION BAR
+   ============================================================ */
+.top-bar {
+  display: flex;
+  align-items: center;
+  background: var(--bg-secondary);
+  border-bottom: 2px solid var(--border);
+  padding: 0 16px;
+  min-height: 48px;
+  gap: 0;
+}
+.tab-btn {
+  padding: 12px 20px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  border-bottom: 3px solid transparent;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.tab-btn:hover { color: var(--text-primary); }
+.tab-btn.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+.top-bar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.theme-toggle {
+  background: var(--accent);
+  border: 2px solid var(--accent);
+  border-radius: 6px;
+  color: #fff;
+  padding: 5px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.theme-toggle:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+
+/* ============================================================
+   SHARED CONTROLS
+   ============================================================ */
+.controls-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+/* Filter dropdown (multi-select) */
+.filter-wrap {
+  position: relative;
+}
+.filter-btn {
+  padding: 5px 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.filter-btn:hover { border-color: var(--accent); }
+.filter-btn .arrow { font-size: 10px; color: var(--text-secondary); }
+.filter-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 200px;
+  max-height: 300px;
+  overflow-y: auto;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 0 0 6px 6px;
+  z-index: 200;
+  display: none;
+  padding: 4px 0;
+}
+.filter-dropdown.open { display: block; }
+.filter-dropdown label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+.filter-dropdown label:hover { background: var(--bg-card); }
+
+/* Period buttons */
+.period-btns {
+  display: flex;
+  gap: 3px;
+}
+.period-btns button {
+  padding: 5px 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+.period-btns button:hover { border-color: var(--accent); color: var(--text-primary); }
+.period-btns button.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+/* Freq selector */
+.freq-select {
+  padding: 5px 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+/* Search input */
+.search-input {
+  position: relative;
+  width: 280px;
+}
+.search-input input {
+  width: 100%;
+  padding: 5px 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+}
+.search-input input:focus { border-color: var(--accent); }
+.search-input input::placeholder { color: var(--text-secondary); }
+.search-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 480px;
+  max-height: 300px;
+  overflow-y: auto;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 0 0 6px 6px;
+  z-index: 200;
+  display: none;
+}
+.search-dropdown.open { display: block; }
+.search-dropdown .item {
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 8px;
+}
+.search-dropdown .item:hover { background: var(--bg-card); }
+.search-dropdown .item .tk { color: var(--accent); font-weight: 600; min-width: 55px; }
+.search-dropdown .item .nm { flex: 1; }
+.search-dropdown .item .mc { color: var(--text-secondary); font-size: 11px; }
+
+/* ============================================================
+   TAB CONTENT
+   ============================================================ */
+.tab-content { display: none; flex: 1; overflow: auto; }
+.tab-content.active { display: flex; flex-direction: column; }
+
+/* ============================================================
+   TAB 1: RETURNS TABLE
+   ============================================================ */
+.returns-table-wrap {
+  flex: 1;
+  overflow: auto;
+  padding: 0 12px;
+}
+.returns-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.returns-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.returns-table th {
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  padding: 8px 10px;
+  text-align: left;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  border-bottom: 2px solid var(--border);
+  font-size: 12px;
+}
+.returns-table th:hover { color: var(--text-primary); }
+.returns-table th.sorted-asc::after { content: ' \25B2'; color: var(--accent); }
+.returns-table th.sorted-desc::after { content: ' \25BC'; color: var(--accent); }
+.returns-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.returns-table tbody tr { background: var(--bg-secondary); }
+.returns-table tbody tr:nth-child(even) { background: var(--bg-table-row); }
+.returns-table tbody tr:hover { background: var(--bg-table-hover); }
+.returns-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.returns-table .pos { color: var(--green); }
+.returns-table .neg { color: var(--red); }
+.returns-table .tk-cell { color: var(--accent); font-weight: 600; }
+.returns-table .aum-cell { color: var(--text-secondary); }
+.returns-table .name-cell { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.returns-table .mc-cell { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.returns-name-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+.returns-fav-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+}
+.returns-fav-btn.active {
+  color: #ffca28;
+}
+.returns-ticker-btn {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  font-size: 13px;
+}
+.returns-fund-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.returns-total {
+  padding: 8px 16px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text-secondary);
+  display: flex;
+  gap: 24px;
+}
+
+/* ============================================================
+   TABS 2-3: MARKET / MC CHARTS & TABLES
+   ============================================================ */
+.section-block {
+  padding: 16px;
+}
+.section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.charts-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.chart-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  position: relative;
+  height: 320px;
+  display: flex;
+  flex-direction: column;
+}
+.chart-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+.chart-canvas-wrap {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+.chart-card canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* Summary tables */
+.summary-tables-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.summary-table-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+}
+.summary-table-card h3 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+.summary-tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.summary-tbl th {
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  padding: 5px 8px;
+  text-align: right;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+.summary-tbl th:first-child { text-align: left; }
+.summary-tbl td {
+  padding: 4px 8px;
+  text-align: right;
+  border-bottom: 1px solid var(--border);
+}
+.summary-tbl td:first-child {
+  text-align: left;
+  font-weight: 500;
+}
+.summary-tbl tr:last-child td { font-weight: 700; }
+.summary-tbl .pos { color: var(--green); }
+.summary-tbl .neg { color: var(--red); }
+
+/* ============================================================
+   TAB 4: INDIVIDUAL FUND
+   ============================================================ */
+.fund-info-bar {
+  padding: 6px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text-secondary);
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+.fund-info-bar .lbl { color: var(--text-secondary); }
+.fund-info-bar .val { color: var(--text-primary); font-weight: 500; }
+
+.fund-charts-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 6px;
+  padding: 6px;
+  flex: 1;
+  min-height: 500px;
+}
+.fund-chart-cell {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  position: relative;
+  overflow: hidden;
+}
+.fund-chart-hdr {
+  position: absolute;
+  top: 6px;
+  left: 10px;
+  z-index: 10;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  pointer-events: none;
+}
+.fund-chart-hdr .title { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.fund-chart-hdr .value { font-size: 12px; font-weight: 600; }
+.fund-chart-container { width: 100%; height: 100%; }
+
+/* ============================================================
+   TAB 5: COMPOSITION
+   ============================================================ */
+.composition-wrap {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+.composition-summary {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.composition-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
+  padding: 10px;
+  overflow: auto;
+}
+.composition-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+}
+.composition-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.composition-card h4 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+.composition-card .meta {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.composition-details {
+  border-top: 1px solid rgba(255,255,255,0.06);
+  padding-top: 6px;
+  margin-top: 6px;
+}
+.composition-details summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--accent);
+}
+.composition-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  max-height: 180px;
+  overflow: auto;
+}
+.composition-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 2px 0;
+}
+.composition-empty {
+  padding: 20px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+.composition-pie-row {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.composition-pie {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  position: relative;
+}
+.composition-pie::after {
+  content: "";
+  position: absolute;
+  inset: 18px;
+  border-radius: 50%;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+}
+.composition-pie-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 102px;
+  overflow: auto;
+}
+.composition-pie-legend li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 2px 0;
+}
+.composition-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 6px;
+  flex-shrink: 0;
+}
+.composition-change-block {
+  border-top: 1px solid rgba(255,255,255,0.06);
+  margin-top: 8px;
+  padding-top: 8px;
+}
+.composition-change-title {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+.composition-change-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.composition-change-col h5 {
+  margin: 0 0 4px;
+  font-size: 12px;
+}
+.composition-change-col.buy h5 { color: var(--green); }
+.composition-change-col.sell h5 { color: var(--red); }
+.composition-change-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 120px;
+  overflow: auto;
+}
+.composition-change-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 2px 0;
+}
+.composition-change-empty {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.composition-fav-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0;
+}
+.composition-fav-btn.active { color: #ffca28; }
+
+.composition-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: none;
+}
+.composition-modal.open {
+  display: block;
+}
+.composition-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+}
+.composition-modal-dialog {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
+  width: min(780px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.composition-modal-head {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.composition-modal-title {
+  font-size: 14px;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.composition-modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.composition-modal-close {
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+.composition-modal-body {
+  padding: 10px;
+  overflow: auto;
+}
+
+/* ============================================================
+   LOADING OVERLAY
+   ============================================================ */
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-primary); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<!-- ============================================================
+     TOP NAVIGATION
+     ============================================================ -->
+<div class="top-bar">
+  <button class="tab-btn active" data-tab="returns">Доходность фондов</button>
+  <button class="tab-btn" data-tab="market">Рынок</button>
+  <button class="tab-btn" data-tab="mc">УК</button>
+  <button class="tab-btn" data-tab="fund">Фонды</button>
+  <button class="tab-btn" data-tab="composition">Избранные фонды, состав</button>
+  <div class="top-bar-right">
+    <button class="theme-toggle" id="themeToggle">Light</button>
+  </div>
+</div>
+
+<!-- ============================================================
+     TAB 1: ДОХОДНОСТЬ ФОНДОВ
+     ============================================================ -->
+<div class="tab-content active" id="tab-returns">
+  <div class="controls-bar">
+    <div class="filter-wrap" id="filterType">
+      <button class="filter-btn">ОПИФ/БПИФ <span class="arrow">&#9662;</span></button>
+      <div class="filter-dropdown" data-key="fund_type"></div>
+    </div>
+    <div class="filter-wrap" id="filterInv">
+      <button class="filter-btn">Объект инвестирования <span class="arrow">&#9662;</span></button>
+      <div class="filter-dropdown" data-key="inv_type"></div>
+    </div>
+    <div class="filter-wrap" id="filterMC">
+      <button class="filter-btn">Управляющая компания <span class="arrow">&#9662;</span></button>
+      <div class="filter-dropdown" data-key="mc"></div>
+    </div>
+  </div>
+  <div class="returns-table-wrap">
+    <table class="returns-table" id="returnsTable">
+      <thead>
+        <tr>
+          <th data-col="name">Название фонда</th>
+          <th data-col="mc">УК</th>
+          <th data-col="fund_type">Тип</th>
+          <th data-col="inv_type">Объект</th>
+          <th data-col="aum" class="num">СЧА, млн руб</th>
+          <th data-col="1m" class="num">1 мес</th>
+          <th data-col="3m" class="num">3 мес</th>
+          <th data-col="6m" class="num">6 мес</th>
+          <th data-col="ytd" class="num">YTD</th>
+          <th data-col="1y" class="num sorted-desc">1 год</th>
+          <th data-col="3y" class="num">3 года</th>
+          <th data-col="5y" class="num">5 лет</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="returns-total" id="returnsTotal"></div>
+</div>
+
+<!-- ============================================================
+     TAB 2: РЫНОК
+     ============================================================ -->
+<div class="tab-content" id="tab-market">
+  <div class="controls-bar">
+    <div class="filter-wrap" id="mktFilterType">
+      <button class="filter-btn">ОПИФ/БПИФ <span class="arrow">&#9662;</span></button>
+      <div class="filter-dropdown" data-key="fund_type_mkt"></div>
+    </div>
+    <div class="period-btns" id="mktPeriods">
+      <button data-period="1M">1M</button>
+      <button data-period="3M">3M</button>
+      <button data-period="6M">6M</button>
+      <button data-period="YTD">YTD</button>
+      <button data-period="1Y" class="active">1Y</button>
+      <button data-period="3Y">3Y</button>
+      <button data-period="5Y">5Y</button>
+      <button data-period="MAX">MAX</button>
+    </div>
+    <select class="freq-select" id="mktFreq">
+      <option value="day">День</option>
+      <option value="week">Неделя</option>
+      <option value="month">Месяц</option>
+      <option value="year">Год</option>
+    </select>
+  </div>
+
+  <div style="overflow:auto; flex:1; padding:0;">
+    <!-- By Investment Type -->
+    <div class="section-block">
+      <div class="charts-row">
+        <div class="chart-card">
+          <div class="chart-card-title">Общий СЧА по объекту инвестирования, млрд руб</div>
+          <div class="chart-canvas-wrap"><canvas id="mktAumByType"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-card-title">Fund Flows по объекту инвестирования, млрд руб</div>
+          <div class="chart-canvas-wrap"><canvas id="mktFlowByType"></canvas></div>
+        </div>
+      </div>
+      <div class="summary-tables-row">
+        <div class="summary-table-card">
+          <h3>Динамика СЧА за период, %</h3>
+          <table class="summary-tbl" id="mktAumSummaryByType"></table>
+        </div>
+        <div class="summary-table-card">
+          <h3>Fund Flows за период, млрд руб</h3>
+          <table class="summary-tbl" id="mktFlowSummaryByType"></table>
+        </div>
+      </div>
+    </div>
+
+    <!-- By Management Company -->
+    <div class="section-block">
+      <div class="section-title">По управляющим компаниям (топ-5 по СЧА)</div>
+      <div class="charts-row">
+        <div class="chart-card">
+          <div class="chart-card-title">Общий СЧА по УК, млрд руб</div>
+          <div class="chart-canvas-wrap"><canvas id="mktAumByMC"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-card-title">Fund Flows по УК, млрд руб</div>
+          <div class="chart-canvas-wrap"><canvas id="mktFlowByMC"></canvas></div>
+        </div>
+      </div>
+      <div class="summary-tables-row">
+        <div class="summary-table-card">
+          <h3>Динамика СЧА за период, %</h3>
+          <table class="summary-tbl" id="mktAumSummaryByMC"></table>
+        </div>
+        <div class="summary-table-card">
+          <h3>Fund Flows за период, млрд руб</h3>
+          <table class="summary-tbl" id="mktFlowSummaryByMC"></table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     TAB 3: УК
+     ============================================================ -->
+<div class="tab-content" id="tab-mc">
+  <div class="controls-bar">
+    <div class="filter-wrap" id="mcFilterType">
+      <button class="filter-btn">ОПИФ/БПИФ <span class="arrow">&#9662;</span></button>
+      <div class="filter-dropdown" data-key="fund_type_mc"></div>
+    </div>
+    <div class="filter-wrap" id="mcFilterMC">
+      <button class="filter-btn" id="mcSelectedLabel">УК: Первая <span class="arrow">&#9662;</span></button>
+      <div class="filter-dropdown" data-key="mc_select" style="max-height:350px;"></div>
+    </div>
+    <div class="period-btns" id="mcPeriods">
+      <button data-period="1M">1M</button>
+      <button data-period="3M">3M</button>
+      <button data-period="6M">6M</button>
+      <button data-period="YTD">YTD</button>
+      <button data-period="1Y" class="active">1Y</button>
+      <button data-period="3Y">3Y</button>
+      <button data-period="5Y">5Y</button>
+      <button data-period="MAX">MAX</button>
+    </div>
+    <select class="freq-select" id="mcFreq">
+      <option value="day">День</option>
+      <option value="week">Неделя</option>
+      <option value="month">Месяц</option>
+      <option value="year">Год</option>
+    </select>
+  </div>
+
+  <div style="overflow:auto; flex:1; padding:0;">
+    <!-- By investment type within MC -->
+    <div class="section-block">
+      <div class="charts-row">
+        <div class="chart-card">
+          <div class="chart-card-title">СЧА по объекту инвестирования, млрд руб</div>
+          <div class="chart-canvas-wrap"><canvas id="mcAumByType"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-card-title">Fund Flows по объекту инвестирования, млрд руб</div>
+          <div class="chart-canvas-wrap"><canvas id="mcFlowByType"></canvas></div>
+        </div>
+      </div>
+      <div class="summary-tables-row">
+        <div class="summary-table-card">
+          <h3>Динамика СЧА за период, %</h3>
+          <table class="summary-tbl" id="mcAumSummaryByType"></table>
+        </div>
+        <div class="summary-table-card">
+          <h3>Fund Flows за период, млрд руб</h3>
+          <table class="summary-tbl" id="mcFlowSummaryByType"></table>
+        </div>
+      </div>
+    </div>
+
+    <!-- By fund within MC -->
+    <div class="section-block">
+      <div class="section-title">По фондам (топ-5 по СЧА)</div>
+      <div class="charts-row">
+        <div class="chart-card">
+          <div class="chart-card-title">СЧА по фондам, млрд руб</div>
+          <div class="chart-canvas-wrap"><canvas id="mcAumByFund"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-card-title">Fund Flows по фондам, млрд руб</div>
+          <div class="chart-canvas-wrap"><canvas id="mcFlowByFund"></canvas></div>
+        </div>
+      </div>
+      <div class="summary-tables-row">
+        <div class="summary-table-card">
+          <h3>Динамика СЧА за период, %</h3>
+          <table class="summary-tbl" id="mcAumSummaryByFund"></table>
+        </div>
+        <div class="summary-table-card">
+          <h3>Fund Flows за период, млрд руб</h3>
+          <table class="summary-tbl" id="mcFlowSummaryByFund"></table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     TAB 4: ФОНДЫ (individual fund)
+     ============================================================ -->
+<div class="tab-content" id="tab-fund">
+  <div class="controls-bar">
+    <div class="search-input" id="fundSearch">
+      <input type="text" placeholder="Тикер/номер или название фонда" autocomplete="off" id="fundSearchInput">
+      <div class="search-dropdown" id="fundSearchDropdown"></div>
+    </div>
+    <div class="period-btns" id="fundPeriods">
+      <button data-period="1M">1M</button>
+      <button data-period="3M">3M</button>
+      <button data-period="6M">6M</button>
+      <button data-period="YTD">YTD</button>
+      <button data-period="1Y" class="active">1Y</button>
+      <button data-period="3Y">3Y</button>
+      <button data-period="5Y">5Y</button>
+      <button data-period="10Y">10Y</button>
+      <button data-period="MAX">MAX</button>
+    </div>
+    <select class="freq-select" id="fundFreq">
+      <option value="day">День</option>
+      <option value="week">Неделя</option>
+      <option value="month">Месяц</option>
+      <option value="year">Год</option>
+    </select>
+    <label style="font-size:13px;display:flex;align-items:center;gap:4px;color:var(--text-secondary);">
+      <input type="checkbox" id="fundPctMode"> Изменение %
+    </label>
+  </div>
+  <div class="fund-info-bar" id="fundInfoBar">
+    <span><span class="lbl">Выберите фонд</span></span>
+  </div>
+  <div class="fund-charts-grid">
+    <div class="fund-chart-cell">
+      <div class="fund-chart-hdr"><span class="title">Цена пая</span><span class="value" id="valNav"></span></div>
+      <div class="fund-chart-container" id="chartNav"></div>
+    </div>
+    <div class="fund-chart-cell">
+      <div class="fund-chart-hdr"><span class="title">СЧА</span><span class="value" id="valAum"></span></div>
+      <div class="fund-chart-container" id="chartAum"></div>
+    </div>
+    <div class="fund-chart-cell">
+      <div class="fund-chart-hdr"><span class="title">Кол-во паёв</span><span class="value" id="valShares"></span></div>
+      <div class="fund-chart-container" id="chartShares"></div>
+    </div>
+    <div class="fund-chart-cell">
+      <div class="fund-chart-hdr"><span class="title">Притоки / оттоки</span><span class="value" id="valFlows"></span></div>
+      <div class="fund-chart-container" id="chartFlows"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     TAB 5: СОСТАВ ФОНДОВ
+     ============================================================ -->
+<div class="tab-content" id="tab-composition">
+  <div class="controls-bar">
+    <div class="search-input" id="compositionSearch">
+      <input type="text" placeholder="Название фонда или УК" autocomplete="off" id="compositionSearchInput">
+    </div>
+    <button class="filter-btn" id="compositionReloadBtn">Обновить составы</button>
+  </div>
+  <div class="composition-wrap">
+    <div class="composition-summary" id="compositionSummary">Загрузка избранных фондов...</div>
+    <div class="composition-grid" id="compositionGrid">
+      <div class="loading">Загружаем избранные фонды...</div>
+    </div>
+  </div>
+</div>
+
+<div class="composition-modal" id="compositionModal">
+  <div class="composition-modal-backdrop" id="compositionModalBackdrop"></div>
+  <div class="composition-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="compositionModalTitle">
+    <div class="composition-modal-head">
+      <div class="composition-modal-title" id="compositionModalTitle">Состав фонда</div>
+      <div class="composition-modal-actions">
+        <button class="composition-fav-btn" id="compositionModalFavBtn" title="Добавить в избранное">☆</button>
+        <button class="composition-modal-close" id="compositionModalCloseBtn">Закрыть</button>
+      </div>
+    </div>
+    <div class="composition-modal-body" id="compositionModalBody"></div>
+  </div>
+</div>
+
+<!-- ============================================================
+     JAVASCRIPT
+     ============================================================ -->
+<script>
+// ============================================================
+// GLOBAL STATE
+// ============================================================
+let allFunds = [];
+let isDark = true;
+
+// Tab 1 state
+let returnsData = [];
+let returnsSortCol = '1y';
+let returnsSortDir = 'desc';
+let returnsFilters = { fund_type: [], inv_type: [], mc: [] };
+
+// Tab 2 state
+let marketData = null;
+let mktPeriod = '1Y';
+let mktFreq = 'day';
+let mktFundType = ['открытый', 'биржевой'];
+let mktCharts = {};
+
+// Tab 3 state
+let mcDetailData = null;
+let mcSelectedMC = 'Первая';
+let mcPeriod = '1Y';
+let mcFreq = 'day';
+let mcFundType = ['открытый', 'биржевой'];
+let mcCharts = {};
+
+// Tab 4 state
+let fundCharts = {};
+let fundSeries = {};
+let currentFund = null;
+let fundRawData = [];
+let fundPeriod = '1Y';
+let fundFreq = 'day';
+let fundPctMode = false;
+
+// Tab 5 state
+let compositionData = [];
+let compositionLoaded = false;
+let compositionQuery = '';
+let favoriteFundIds = new Set();
+let compositionModalFundId = null;
+
+const CHART_COLORS = ['#4fc3f7','#ab47bc','#ffa726','#66bb6a','#ef5350','#42a5f5','#ec407a','#78909c'];
+const TYPE_ORDER = ['Акции','Смешанный','Облигации','Драгметаллы','Денежный'];
+const FAVORITES_STORAGE_KEY = 'fund_dashboard_favorites_v1';
+
+// ============================================================
+// INITIALIZATION
+// ============================================================
+async function init() {
+  setupTabs();
+  setupTheme();
+  initCompositionModal();
+  loadFavoriteFunds();
+  await loadFundsList();
+  initTab1();
+  initTab2Filters();
+  initTab3Filters();
+  initTab4();
+  initTab5();
+  loadReturnsData();
+}
+
+async function loadFundsList() {
+  const res = await fetch('/api/funds');
+  allFunds = await res.json();
+}
+
+function loadFavoriteFunds() {
+  try {
+    const raw = localStorage.getItem(FAVORITES_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    const ids = Array.isArray(parsed) ? parsed.map(v => String(v)) : [];
+    favoriteFundIds = new Set(ids);
+  } catch {
+    favoriteFundIds = new Set();
+  }
+}
+
+function saveFavoriteFunds() {
+  localStorage.setItem(
+    FAVORITES_STORAGE_KEY,
+    JSON.stringify(Array.from(favoriteFundIds))
+  );
+}
+
+function isFavoriteFund(fundId) {
+  return favoriteFundIds.has(String(fundId));
+}
+
+function toggleFavoriteFund(fundId) {
+  const key = String(fundId);
+  if (favoriteFundIds.has(key)) favoriteFundIds.delete(key);
+  else favoriteFundIds.add(key);
+  saveFavoriteFunds();
+  renderReturnsTable();
+  if (compositionLoaded) renderCompositionCards();
+  updateCompositionModalFavButton();
+}
+
+// ============================================================
+// TAB NAVIGATION
+// ============================================================
+function setupTabs() {
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+      btn.classList.add('active');
+      const tab = document.getElementById('tab-' + btn.dataset.tab);
+      tab.classList.add('active');
+      onTabActivated(btn.dataset.tab);
+    });
+  });
+}
+
+function onTabActivated(tabId) {
+  if (tabId === 'market' && !marketData) loadMarketData();
+  if (tabId === 'mc' && !mcDetailData) loadMCDetailData();
+  if (tabId === 'fund') resizeFundCharts();
+  if (tabId === 'composition' && !compositionLoaded) loadCompositionData();
+}
+
+// ============================================================
+// THEME
+// ============================================================
+function setupTheme() {
+  document.getElementById('themeToggle').addEventListener('click', () => {
+    isDark = !isDark;
+    if (isDark) document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', 'light');
+    document.getElementById('themeToggle').textContent = isDark ? 'Light' : 'Dark';
+    updateAllChartThemes();
+  });
+}
+
+function updateAllChartThemes() {
+  Object.values(mktCharts).forEach(c => { if (c) updateChartJSTheme(c); });
+  Object.values(mcCharts).forEach(c => { if (c) updateChartJSTheme(c); });
+  const lwOpts = getLWThemeOpts();
+  Object.values(fundCharts).forEach(c => { if (c) c.applyOptions(lwOpts); });
+}
+
+function updateChartJSTheme(chart) {
+  const gc = isDark ? 'rgba(42,58,92,0.5)' : 'rgba(0,0,0,0.06)';
+  const tc = isDark ? '#8a8aaa' : '#757575';
+  if (chart.options.scales && chart.options.scales.x) {
+    chart.options.scales.x.grid.color = gc;
+    chart.options.scales.x.ticks.color = tc;
+  }
+  if (chart.options.scales && chart.options.scales.y) {
+    chart.options.scales.y.grid.color = gc;
+    chart.options.scales.y.ticks.color = tc;
+  }
+  chart.update('none');
+}
+
+function getLWThemeOpts() {
+  return {
+    layout: { background: { color: 'transparent' }, textColor: isDark ? '#8a8aaa' : '#757575', fontSize: 11 },
+    grid: {
+      vertLines: { color: isDark ? 'rgba(42,58,92,0.5)' : 'rgba(0,0,0,0.06)' },
+      horzLines: { color: isDark ? 'rgba(42,58,92,0.5)' : 'rgba(0,0,0,0.06)' },
+    },
+    timeScale: { borderColor: isDark ? '#2a3a5c' : '#e0e0e0' },
+    rightPriceScale: { borderColor: isDark ? '#2a3a5c' : '#e0e0e0' },
+  };
+}
+
+// ============================================================
+// TAB 1: ДОХОДНОСТЬ ФОНДОВ
+// ============================================================
+function initTab1() {
+  // Sort handlers
+  document.querySelectorAll('#returnsTable th').forEach(th => {
+    th.addEventListener('click', () => {
+      const col = th.dataset.col;
+      if (returnsSortCol === col) returnsSortDir = returnsSortDir === 'asc' ? 'desc' : 'asc';
+      else { returnsSortCol = col; returnsSortDir = 'desc'; }
+      renderReturnsTable();
+    });
+  });
+
+  const tbody = document.querySelector('#returnsTable tbody');
+  tbody.addEventListener('click', (event) => {
+    const favBtn = event.target.closest('.returns-fav-btn');
+    if (favBtn) {
+      event.preventDefault();
+      toggleFavoriteFund(favBtn.dataset.fundId);
+      return;
+    }
+
+    const tickerBtn = event.target.closest('.returns-ticker-btn');
+    if (tickerBtn) {
+      event.preventDefault();
+      openCompositionModalByFundId(tickerBtn.dataset.fundId);
+    }
+  });
+}
+
+function initTab1Filters() {
+  // Build filter options from data
+  const types = [...new Set(returnsData.map(d => d.fund_type).filter(Boolean))].sort();
+  const invTypes = [...new Set(returnsData.map(d => d.inv_type).filter(Boolean))].sort();
+  const mcs = [...new Set(returnsData.map(d => d.mc).filter(Boolean))].sort();
+
+  returnsFilters.fund_type = types.slice();
+  returnsFilters.inv_type = invTypes.slice();
+  returnsFilters.mc = mcs.slice();
+
+  buildFilterDropdown('filterType', 'fund_type', types, returnsFilters, () => renderReturnsTable());
+  buildFilterDropdown('filterInv', 'inv_type', invTypes, returnsFilters, () => renderReturnsTable());
+  buildFilterDropdown('filterMC', 'mc', mcs, returnsFilters, () => renderReturnsTable());
+}
+
+async function loadReturnsData() {
+  const res = await fetch('/api/returns');
+  returnsData = await res.json();
+  initTab1Filters();
+  renderReturnsTable();
+}
+
+function renderReturnsTable() {
+  // Filter
+  let data = returnsData.filter(d =>
+    returnsFilters.fund_type.includes(d.fund_type) &&
+    returnsFilters.inv_type.includes(d.inv_type) &&
+    returnsFilters.mc.includes(d.mc)
+  );
+
+  // Sort
+  data.sort((a, b) => {
+    let va = a[returnsSortCol], vb = b[returnsSortCol];
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    if (typeof va === 'string') {
+      const cmp = va.localeCompare(vb, 'ru');
+      return returnsSortDir === 'asc' ? cmp : -cmp;
+    }
+    return returnsSortDir === 'asc' ? va - vb : vb - va;
+  });
+
+  // Update sort indicators
+  document.querySelectorAll('#returnsTable th').forEach(th => {
+    th.classList.remove('sorted-asc', 'sorted-desc');
+    if (th.dataset.col === returnsSortCol) th.classList.add('sorted-' + returnsSortDir);
+  });
+
+  // Render
+  const tbody = document.querySelector('#returnsTable tbody');
+  tbody.innerHTML = data.map(d => {
+    const tk = d.ticker || d.fund_id || '';
+    const fundId = String(d.id);
+    const favoriteClass = isFavoriteFund(fundId) ? 'active' : '';
+    const tickerLabel = tk || `ID ${fundId}`;
+    const aumM = d.aum ? (d.aum / 1e6).toFixed(0) : '';
+    return `<tr>
+      <td class="name-cell" title="${escapeHtml(`${tk} ${d.name}`)}">
+        <span class="returns-name-wrap">
+          <button class="returns-fav-btn ${favoriteClass}" data-fund-id="${fundId}" title="В избранное">${isFavoriteFund(fundId) ? '★' : '☆'}</button>
+          <button class="returns-ticker-btn tk-cell" data-fund-id="${fundId}" title="Показать состав фонда">${escapeHtml(tickerLabel)}</button>
+          <span class="returns-fund-name">${escapeHtml(d.name || '')}</span>
+        </span>
+      </td>
+      <td class="mc-cell" title="${escapeHtml(d.mc || '')}">${escapeHtml(d.mc || '')}</td>
+      <td>${d.fund_type === 'биржевой' ? 'БПИФ' : 'ОПИФ'}</td>
+      <td>${escapeHtml(d.inv_type || '')}</td>
+      <td class="num aum-cell">${aumM ? (+aumM).toLocaleString('ru-RU') : ''}</td>
+      ${renderReturnCell(d['1m'])}
+      ${renderReturnCell(d['3m'])}
+      ${renderReturnCell(d['6m'])}
+      ${renderReturnCell(d['ytd'])}
+      ${renderReturnCell(d['1y'])}
+      ${renderReturnCell(d['3y'])}
+      ${renderReturnCell(d['5y'])}
+    </tr>`;
+  }).join('');
+
+  // Total row
+  const totalAum = data.reduce((s, d) => s + (d.aum || 0), 0);
+  document.getElementById('returnsTotal').innerHTML =
+    `<span>Показано фондов: <b>${data.length}</b> из ${returnsData.length}</span>` +
+    `<span>Суммарная СЧА: <b>${(totalAum / 1e9).toLocaleString('ru-RU', {maximumFractionDigits:1})} млрд руб</b></span>`;
+}
+
+function renderReturnCell(val) {
+  if (val == null) return '<td class="num">--</td>';
+  const cls = val >= 0 ? 'pos' : 'neg';
+  const sign = val >= 0 ? '+' : '';
+  return `<td class="num ${cls}">${sign}${val.toFixed(1)}%</td>`;
+}
+
+// ============================================================
+// TAB 2: РЫНОК
+// ============================================================
+function initTab2Filters() {
+  buildFundTypeFilter('mktFilterType', 'fund_type_mkt', mktFundType, () => { marketData = null; loadMarketData(); });
+
+  document.getElementById('mktPeriods').addEventListener('click', e => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    document.querySelectorAll('#mktPeriods button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    mktPeriod = btn.dataset.period;
+    if (marketData) renderMarketCharts();
+  });
+
+  document.getElementById('mktFreq').addEventListener('change', e => {
+    mktFreq = e.target.value;
+    if (marketData) renderMarketCharts();
+  });
+}
+
+async function loadMarketData() {
+  const ft = mktFundType.length === 2 ? 'all' : mktFundType.map(t => t === 'открытый' ? 'opif' : 'bpif').join(',');
+  const res = await fetch('/api/market?fund_type=' + ft);
+  marketData = await res.json();
+  renderMarketCharts();
+}
+
+function renderMarketCharts() {
+  const d = marketData;
+  if (!d) return;
+
+  // Filter dates by period
+  const { fromDate } = getPeriodRange(mktPeriod);
+
+  // By Type
+  renderStackedAreaChart('mktAumByType', d.byType, 'aum', fromDate, mktFreq, TYPE_ORDER, 'mktCharts', 1e9, ' млрд');
+  renderStackedBarChart('mktFlowByType', d.byType, 'flow', fromDate, mktFreq, TYPE_ORDER, 'mktCharts', 1e9, ' млрд');
+
+  // By MC
+  const mcOrder = [...(d.topMCs || []), 'Прочие'];
+  renderStackedAreaChart('mktAumByMC', d.byMC, 'aum', fromDate, mktFreq, mcOrder, 'mktCharts', 1e9, ' млрд');
+  renderStackedBarChart('mktFlowByMC', d.byMC, 'flow', fromDate, mktFreq, mcOrder, 'mktCharts', 1e9, ' млрд');
+
+  // Summary tables (always full periods, ignoring period filter)
+  renderSummaryTable('mktAumSummaryByType', d.byType, 'aum', TYPE_ORDER, 'pct');
+  renderSummaryTable('mktFlowSummaryByType', d.byType, 'flow', TYPE_ORDER, 'abs');
+  renderSummaryTable('mktAumSummaryByMC', d.byMC, 'aum', mcOrder, 'pct');
+  renderSummaryTable('mktFlowSummaryByMC', d.byMC, 'flow', mcOrder, 'abs');
+}
+
+// ============================================================
+// TAB 3: УК
+// ============================================================
+function initTab3Filters() {
+  buildFundTypeFilter('mcFilterType', 'fund_type_mc', mcFundType, () => { mcDetailData = null; loadMCDetailData(); });
+
+  // MC selector (radio-style: single select)
+  const mcs = [...new Set(allFunds.map(f => f.management_company).filter(Boolean))].sort();
+  const mcBtn = document.getElementById('mcSelectedLabel');
+  const dropdown = document.querySelector('#mcFilterMC .filter-dropdown');
+  if (mcs.length > 0 && !mcs.includes(mcSelectedMC)) {
+    mcSelectedMC = mcs[0];
+  }
+  mcBtn.innerHTML = `УК: ${escapeHtml(mcSelectedMC || '\u2014')} <span class="arrow">&#9662;</span>`;
+  dropdown.innerHTML = mcs.map(mc =>
+    `<label><input type="radio" name="mc_radio" value="${escapeAttr(mc)}" ${mc === mcSelectedMC ? 'checked' : ''}> ${escapeHtml(mc)}</label>`
+  ).join('');
+
+  mcBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    closeAllDropdowns();
+    dropdown.classList.toggle('open');
+  });
+
+  dropdown.querySelectorAll('input').forEach(inp => {
+    inp.addEventListener('change', () => {
+      mcSelectedMC = inp.value;
+      mcBtn.innerHTML = `УК: ${escapeHtml(mcSelectedMC)} <span class="arrow">&#9662;</span>`;
+      dropdown.classList.remove('open');
+      mcDetailData = null;
+      loadMCDetailData();
+    });
+  });
+
+  document.getElementById('mcPeriods').addEventListener('click', e => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    document.querySelectorAll('#mcPeriods button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    mcPeriod = btn.dataset.period;
+    if (mcDetailData) renderMCCharts();
+  });
+
+  document.getElementById('mcFreq').addEventListener('change', e => {
+    mcFreq = e.target.value;
+    if (mcDetailData) renderMCCharts();
+  });
+}
+
+async function loadMCDetailData() {
+  if (!mcSelectedMC) {
+    mcDetailData = { byType: { dates: [], data: {} }, byFund: { dates: [], data: {} }, topFundNames: [] };
+    renderMCCharts();
+    return;
+  }
+  const ft = mcFundType.length === 2 ? 'all' : mcFundType.map(t => t === 'открытый' ? 'opif' : 'bpif').join(',');
+  const res = await fetch(`/api/mc-detail?mc=${encodeURIComponent(mcSelectedMC)}&fund_type=${ft}`);
+  mcDetailData = await res.json();
+  renderMCCharts();
+}
+
+function renderMCCharts() {
+  const d = mcDetailData;
+  if (!d) return;
+
+  const { fromDate } = getPeriodRange(mcPeriod);
+
+  // By Type
+  renderStackedAreaChart('mcAumByType', d.byType, 'aum', fromDate, mcFreq, TYPE_ORDER, 'mcCharts', 1e9, ' млрд');
+  renderStackedBarChart('mcFlowByType', d.byType, 'flow', fromDate, mcFreq, TYPE_ORDER, 'mcCharts', 1e9, ' млрд');
+
+  // By Fund
+  const fundOrder = [...(d.topFundNames || []), 'Прочие'];
+  renderStackedAreaChart('mcAumByFund', d.byFund, 'aum', fromDate, mcFreq, fundOrder, 'mcCharts', 1e9, ' млрд');
+  renderStackedBarChart('mcFlowByFund', d.byFund, 'flow', fromDate, mcFreq, fundOrder, 'mcCharts', 1e9, ' млрд');
+
+  // Summary tables
+  renderSummaryTable('mcAumSummaryByType', d.byType, 'aum', TYPE_ORDER, 'pct');
+  renderSummaryTable('mcFlowSummaryByType', d.byType, 'flow', TYPE_ORDER, 'abs');
+  const fo2 = [...(d.topFundNames || []), 'Прочие'];
+  renderSummaryTable('mcAumSummaryByFund', d.byFund, 'aum', fo2, 'pct');
+  renderSummaryTable('mcFlowSummaryByFund', d.byFund, 'flow', fo2, 'abs');
+}
+
+// ============================================================
+// TAB 4: ФОНДЫ (individual fund)
+// ============================================================
+const FUND_CHART_KEYS = ['nav', 'aum', 'shares', 'flows'];
+const FUND_COLORS = { nav: '#4fc3f7', aum: '#ab47bc', shares: '#ffa726', flowUp: 'rgba(38,166,154,0.8)', flowDown: 'rgba(239,83,80,0.8)' };
+
+function initTab4() {
+  setupFundSearch();
+  createFundCharts();
+
+  document.getElementById('fundPeriods').addEventListener('click', e => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    document.querySelectorAll('#fundPeriods button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    fundPeriod = btn.dataset.period;
+    if (currentFund) loadFundData(currentFund);
+  });
+
+  document.getElementById('fundFreq').addEventListener('change', e => {
+    fundFreq = e.target.value;
+    if (fundRawData.length) renderFundCharts(fundRawData);
+  });
+
+  document.getElementById('fundPctMode').addEventListener('change', e => {
+    fundPctMode = e.target.checked;
+    if (fundRawData.length) renderFundCharts(fundRawData);
+  });
+
+  // Default fund: LQDT
+  const lqdt = allFunds.find(f => f.ticker && f.ticker.toUpperCase() === 'LQDT');
+  const defaultFund = lqdt || allFunds[0] || null;
+  if (defaultFund) selectFund(defaultFund);
+}
+
+function setupFundSearch() {
+  const input = document.getElementById('fundSearchInput');
+  const dropdown = document.getElementById('fundSearchDropdown');
+  setupSearchAutocomplete(input, dropdown, f => selectFund(f));
+}
+
+function selectFund(fund) {
+  currentFund = fund;
+  const tk = fund.ticker || fund.fund_id || '';
+  document.getElementById('fundSearchInput').value = tk ? `${tk} - ${fund.name}` : fund.name;
+  loadFundData(fund);
+}
+
+async function loadFundData(fund) {
+  const { from, to } = getPeriodDates(fundPeriod);
+  updateFundInfoBar(fund, null);
+  const res = await fetch(`/api/nav/${fund.id}?from=${from}&to=${to}`);
+  const json = await res.json();
+  if (json.error) return;
+  fundRawData = json.data;
+  updateFundInfoBar(fund, fundRawData);
+  renderFundCharts(fundRawData);
+}
+
+function updateFundInfoBar(fund, data) {
+  const el = document.getElementById('fundInfoBar');
+  const parts = [];
+  if (fund.ticker) parts.push(`<span><span class="lbl">Тикер:</span> <span class="val">${escapeHtml(fund.ticker)}</span></span>`);
+  if (fund.fund_id) parts.push(`<span><span class="lbl">Номер:</span> <span class="val">${escapeHtml(fund.fund_id)}</span></span>`);
+  parts.push(`<span><span class="lbl">УК:</span> <span class="val">${escapeHtml(fund.management_company || '\u2014')}</span></span>`);
+  parts.push(`<span><span class="lbl">Тип:</span> <span class="val">${escapeHtml(fund.fund_type || '\u2014')}</span></span>`);
+  parts.push(`<span><span class="lbl">Категория:</span> <span class="val">${escapeHtml(fund.investment_type || '\u2014')}</span></span>`);
+  if (data && data.length > 0) {
+    const last = data[data.length - 1];
+    const firstNavPoint = data.find(d => d.nav != null);
+    let lastNavPoint = null;
+    let lastAumPoint = null;
+    for (let i = data.length - 1; i >= 0; i--) {
+      if (!lastNavPoint && data[i].nav != null) lastNavPoint = data[i];
+      if (!lastAumPoint && data[i].aum != null) lastAumPoint = data[i];
+      if (lastNavPoint && lastAumPoint) break;
+    }
+    parts.push(`<span><span class="lbl">Пай:</span> <span class="val">${fmtNum((lastNavPoint || last).nav)}</span></span>`);
+    parts.push(`<span><span class="lbl">СЧА:</span> <span class="val">${fmtAum((lastAumPoint || last).aum)}</span></span>`);
+    if (firstNavPoint && lastNavPoint && firstNavPoint.nav > 0) {
+      const ret = ((lastNavPoint.nav / firstNavPoint.nav) - 1) * 100;
+      const cls = ret >= 0 ? 'color:var(--green)' : 'color:var(--red)';
+      const sign = ret >= 0 ? '+' : '';
+      parts.push(`<span><span class="lbl">Доходность:</span> <span class="val" style="${cls}">${sign}${ret.toFixed(2)}%</span></span>`);
+    }
+  }
+  el.innerHTML = parts.join('');
+}
+
+function createFundCharts() {
+  const opts = { ...getLWThemeOpts(), crosshair: { mode: 0 }, timeScale: { ...getLWThemeOpts().timeScale, timeVisible: false }, handleScroll: { vertTouchDrag: false } };
+
+  fundCharts.nav = LightweightCharts.createChart(document.getElementById('chartNav'), opts);
+  fundSeries.nav = fundCharts.nav.addSeries(LightweightCharts.LineSeries, { color: FUND_COLORS.nav, lineWidth: 2, priceFormat: { type: 'price', precision: 2, minMove: 0.01 } });
+
+  fundCharts.aum = LightweightCharts.createChart(document.getElementById('chartAum'), opts);
+  fundSeries.aum = fundCharts.aum.addSeries(LightweightCharts.LineSeries, { color: FUND_COLORS.aum, lineWidth: 2, priceFormat: { type: 'custom', formatter: v => fmtAum(v) } });
+
+  fundCharts.shares = LightweightCharts.createChart(document.getElementById('chartShares'), opts);
+  fundSeries.shares = fundCharts.shares.addSeries(LightweightCharts.LineSeries, { color: FUND_COLORS.shares, lineWidth: 2, priceFormat: { type: 'custom', formatter: v => fmtShares(v) } });
+
+  fundCharts.flows = LightweightCharts.createChart(document.getElementById('chartFlows'), opts);
+  fundSeries.flows = fundCharts.flows.addSeries(LightweightCharts.HistogramSeries, { priceFormat: { type: 'custom', formatter: v => fmtAum(v) } });
+
+  // Sync visible range & crosshair
+  let syncing = false;
+  FUND_CHART_KEYS.forEach(key => {
+    fundCharts[key].timeScale().subscribeVisibleLogicalRangeChange(range => {
+      if (syncing) return; syncing = true;
+      FUND_CHART_KEYS.forEach(o => { if (o !== key) fundCharts[o].timeScale().setVisibleLogicalRange(range); });
+      syncing = false;
+    });
+    fundCharts[key].subscribeCrosshairMove(param => {
+      if (syncing) return; syncing = true;
+      FUND_CHART_KEYS.forEach(o => {
+        if (o !== key) {
+          if (param.time) fundCharts[o].setCrosshairPosition(NaN, param.time, fundSeries[o]);
+          else fundCharts[o].clearCrosshairPosition();
+        }
+      });
+      syncing = false;
+      updateFundCrosshair(param);
+    });
+  });
+
+  setTimeout(resizeFundCharts, 100);
+  window.addEventListener('resize', resizeFundCharts);
+}
+
+function resizeFundCharts() {
+  FUND_CHART_KEYS.forEach((key, i) => {
+    const cell = document.querySelectorAll('#tab-fund .fund-chart-container')[i];
+    if (cell && cell.clientWidth > 0) {
+      fundCharts[key].applyOptions({ width: cell.clientWidth, height: cell.clientHeight });
+      fundCharts[key].timeScale().fitContent();
+    }
+  });
+}
+
+function renderFundCharts(data) {
+  const agg = aggregateData(data, fundFreq);
+
+  if (fundPctMode && agg.length > 0) {
+    const base = agg[0];
+    fundSeries.nav.setData(agg.filter(d => d.nav != null && base.nav).map(d => ({ time: d.time, value: ((d.nav / base.nav) - 1) * 100 })));
+    fundSeries.nav.applyOptions({ priceFormat: { type: 'custom', formatter: v => v.toFixed(2) + '%' } });
+  } else {
+    fundSeries.nav.setData(agg.filter(d => d.nav != null).map(d => ({ time: d.time, value: d.nav })));
+    fundSeries.nav.applyOptions({ priceFormat: { type: 'price', precision: 2, minMove: 0.01 } });
+  }
+
+  if (fundPctMode && agg.length > 0) {
+    const base = agg[0];
+    fundSeries.aum.setData(agg.filter(d => d.aum != null && base.aum).map(d => ({ time: d.time, value: ((d.aum / base.aum) - 1) * 100 })));
+    fundSeries.aum.applyOptions({ priceFormat: { type: 'custom', formatter: v => v.toFixed(2) + '%' } });
+    fundSeries.shares.setData(agg.filter(d => d.shares != null && base.shares).map(d => ({ time: d.time, value: ((d.shares / base.shares) - 1) * 100 })));
+    fundSeries.shares.applyOptions({ priceFormat: { type: 'custom', formatter: v => v.toFixed(2) + '%' } });
+  } else {
+    fundSeries.aum.setData(agg.filter(d => d.aum != null).map(d => ({ time: d.time, value: d.aum })));
+    fundSeries.aum.applyOptions({ priceFormat: { type: 'custom', formatter: v => fmtAum(v) } });
+    fundSeries.shares.setData(agg.filter(d => d.shares != null).map(d => ({ time: d.time, value: d.shares })));
+    fundSeries.shares.applyOptions({ priceFormat: { type: 'custom', formatter: v => fmtShares(v) } });
+  }
+  fundSeries.flows.setData(agg.filter(d => d.flow != null).map(d => ({
+    time: d.time, value: d.flow,
+    color: d.flow >= 0 ? FUND_COLORS.flowUp : FUND_COLORS.flowDown,
+  })));
+
+  Object.values(fundCharts).forEach(c => c.timeScale().fitContent());
+}
+
+function updateFundCrosshair(param) {
+  if (!param.time) {
+    ['valNav','valAum','valShares','valFlows'].forEach(id => document.getElementById(id).textContent = '');
+    return;
+  }
+  const timeStr = typeof param.time === 'string' ? param.time : `${param.time.year}-${String(param.time.month).padStart(2,'0')}-${String(param.time.day).padStart(2,'0')}`;
+  const agg = aggregateData(fundRawData, fundFreq);
+  const pt = agg.find(d => d.time === timeStr);
+  if (!pt) return;
+
+  const navEl = document.getElementById('valNav');
+  if (fundPctMode && agg.length > 0 && agg[0].nav) {
+    const pct = ((pt.nav / agg[0].nav) - 1) * 100;
+    navEl.textContent = pct.toFixed(2) + '%';
+    navEl.style.color = pct >= 0 ? 'var(--green)' : 'var(--red)';
+  } else {
+    navEl.textContent = pt.nav != null ? fmtNum(pt.nav) : '';
+    navEl.style.color = FUND_COLORS.nav;
+  }
+
+  const aumEl = document.getElementById('valAum');
+  if (fundPctMode && agg.length > 0 && agg[0].aum) {
+    const pct = ((pt.aum / agg[0].aum) - 1) * 100;
+    aumEl.textContent = pct.toFixed(2) + '%';
+    aumEl.style.color = pct >= 0 ? 'var(--green)' : 'var(--red)';
+  } else {
+    aumEl.textContent = pt.aum != null ? fmtAum(pt.aum) : '';
+    aumEl.style.color = FUND_COLORS.aum;
+  }
+
+  const sharesEl = document.getElementById('valShares');
+  if (fundPctMode && agg.length > 0 && agg[0].shares) {
+    const pct = ((pt.shares / agg[0].shares) - 1) * 100;
+    sharesEl.textContent = pct.toFixed(2) + '%';
+    sharesEl.style.color = pct >= 0 ? 'var(--green)' : 'var(--red)';
+  } else {
+    sharesEl.textContent = pt.shares != null ? fmtShares(pt.shares) : '';
+    sharesEl.style.color = FUND_COLORS.shares;
+  }
+
+  const flowsEl = document.getElementById('valFlows');
+  if (pt.flow != null) {
+    flowsEl.textContent = fmtFlow(pt.flow);
+    flowsEl.style.color = pt.flow >= 0 ? 'var(--green)' : 'var(--red)';
+  } else flowsEl.textContent = '';
+}
+
+// ============================================================
+// TAB 5: СОСТАВ ФОНДОВ
+// ============================================================
+function initTab5() {
+  const input = document.getElementById('compositionSearchInput');
+  input.addEventListener('input', () => {
+    compositionQuery = input.value.trim().toLowerCase();
+    renderCompositionCards();
+  });
+
+  document.getElementById('compositionReloadBtn').addEventListener('click', () => {
+    loadCompositionData(true);
+  });
+
+  document.getElementById('compositionGrid').addEventListener('click', (event) => {
+    const favBtn = event.target.closest('.composition-fav-btn');
+    if (!favBtn) return;
+    event.preventDefault();
+    toggleFavoriteFund(favBtn.dataset.fundId);
+  });
+}
+
+function initCompositionModal() {
+  const closeBtn = document.getElementById('compositionModalCloseBtn');
+  const backdrop = document.getElementById('compositionModalBackdrop');
+  const favBtn = document.getElementById('compositionModalFavBtn');
+
+  closeBtn.addEventListener('click', closeCompositionModal);
+  backdrop.addEventListener('click', closeCompositionModal);
+  favBtn.addEventListener('click', () => {
+    if (!compositionModalFundId) return;
+    toggleFavoriteFund(compositionModalFundId);
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeCompositionModal();
+  });
+}
+
+function closeCompositionModal() {
+  const modal = document.getElementById('compositionModal');
+  modal.classList.remove('open');
+  compositionModalFundId = null;
+}
+
+function updateCompositionModalFavButton() {
+  const btn = document.getElementById('compositionModalFavBtn');
+  if (!btn) return;
+  const active = compositionModalFundId && isFavoriteFund(compositionModalFundId);
+  btn.textContent = active ? '★' : '☆';
+  btn.classList.toggle('active', Boolean(active));
+  btn.title = active ? 'Убрать из избранного' : 'Добавить в избранное';
+}
+
+async function openCompositionModalByFundId(fundId) {
+  const key = String(fundId);
+  const requestKey = key;
+  compositionModalFundId = key;
+  const modal = document.getElementById('compositionModal');
+  const titleEl = document.getElementById('compositionModalTitle');
+  const bodyEl = document.getElementById('compositionModalBody');
+  const fund = allFunds.find((f) => String(f.id) === key) || null;
+
+  titleEl.textContent = fund ? `Состав: ${fund.name}` : 'Состав фонда';
+  updateCompositionModalFavButton();
+  bodyEl.innerHTML = '<div class="loading">Загружаем состав фонда...</div>';
+  modal.classList.add('open');
+
+  await loadCompositionData(false);
+  if (compositionModalFundId !== requestKey) return;
+
+  const item = findCompositionByFundId(key);
+  if (!item) {
+    bodyEl.innerHTML = '<div class="composition-empty">По этому фонду нет публичного блока структуры на источнике.</div>';
+    return;
+  }
+
+  bodyEl.innerHTML = renderCompositionCard(item);
+}
+
+async function loadCompositionData(forceReload = false) {
+  const summaryEl = document.getElementById('compositionSummary');
+  const gridEl = document.getElementById('compositionGrid');
+
+  if (compositionLoaded && !forceReload) return compositionData;
+
+  if (forceReload) compositionLoaded = false;
+  summaryEl.textContent = 'Загрузка избранных фондов...';
+  gridEl.innerHTML = '<div class="loading">Загружаем избранные фонды...</div>';
+
+  try {
+    const url = forceReload
+      ? `/api/compositions?refresh=${Date.now()}`
+      : '/api/compositions';
+    const res = await fetch(url);
+    const payload = await res.json();
+
+    if (!res.ok) {
+      const msg = (payload && payload.error) ? payload.error : 'Ошибка загрузки данных';
+      summaryEl.textContent = msg;
+      gridEl.innerHTML = `<div class="composition-empty">${escapeHtml(msg)}</div>`;
+      return [];
+    }
+
+    compositionData = Array.isArray(payload) ? payload : [];
+    compositionLoaded = true;
+    renderCompositionCards();
+    return compositionData;
+  } catch (error) {
+    const msg = 'Ошибка сети при загрузке составов';
+    summaryEl.textContent = msg;
+    gridEl.innerHTML = `<div class="composition-empty">${escapeHtml(msg)}</div>`;
+    return [];
+  }
+}
+
+function renderCompositionCards() {
+  const summaryEl = document.getElementById('compositionSummary');
+  const gridEl = document.getElementById('compositionGrid');
+  if (!summaryEl || !gridEl) return;
+
+  if (favoriteFundIds.size === 0) {
+    summaryEl.textContent = 'Избранные фонды: 0';
+    gridEl.innerHTML = '<div class="composition-empty">Добавьте фонды в избранное на вкладке "Доходность фондов" (кнопка ☆ рядом с тикером).</div>';
+    return;
+  }
+
+  const q = compositionQuery;
+  const favoriteRows = compositionData.filter(item => isFavoriteFund(item.id));
+  const rows = favoriteRows.filter(item => {
+    const name = (item.name || '').toLowerCase();
+    const mc = (item.management_company || '').toLowerCase();
+    return !q || name.includes(q) || mc.includes(q);
+  });
+
+  const changedCount = rows.filter(item =>
+    Boolean(item?.changes?.previous_date) &&
+    ((item?.changes?.bought?.length || 0) + (item?.changes?.sold?.length || 0)) > 0
+  ).length;
+  const withoutPublicStructure = Math.max(0, favoriteFundIds.size - favoriteRows.length);
+  summaryEl.textContent =
+    `Избранных со структурой: ${rows.length} из ${favoriteRows.length}` +
+    ` · Без публичного состава: ${withoutPublicStructure}` +
+    ` · Изменились: ${changedCount}`;
+  if (!rows.length) {
+    gridEl.innerHTML = '<div class="composition-empty">Среди избранных нет фондов по вашему фильтру или у них нет публичного состава.</div>';
+    return;
+  }
+
+  gridEl.innerHTML = rows.map(item => renderCompositionCard(item, { showFavorite: true })).join('');
+}
+
+function findCompositionByFundId(fundId) {
+  const key = String(fundId);
+  return compositionData.find(item => String(item.id) === key) || null;
+}
+
+function renderCompositionCard(item, { showFavorite = false } = {}) {
+  const issuerSection = renderCompositionSection('Позиции (ТОП-10)', item.issuers, true);
+  const pieSection = renderCompositionPie(item.issuers);
+  const changesSection = renderCompositionChanges(item.changes);
+  const dateLabel = item.structure_date
+    ? `Срез: ${escapeHtml(formatDateHuman(item.structure_date))}`
+    : 'Дата среза не указана';
+  const favBtn = showFavorite
+    ? `<button class="composition-fav-btn ${isFavoriteFund(item.id) ? 'active' : ''}" data-fund-id="${escapeHtml(String(item.id))}" title="В избранное">${isFavoriteFund(item.id) ? '★' : '☆'}</button>`
+    : '';
+
+  return `<article class="composition-card">
+    <div class="composition-card-head">
+      <h4>${escapeHtml(item.name || 'Без названия')}</h4>
+      ${favBtn}
+    </div>
+    <p class="meta">УК: ${escapeHtml(item.management_company || '—')} · ${dateLabel}</p>
+    ${pieSection}
+    ${issuerSection}
+    ${changesSection}
+  </article>`;
+}
+
+function renderCompositionSection(title, list, opened = false) {
+  const rows = Array.isArray(list) ? list : [];
+  if (!rows.length) return '';
+  const openAttr = opened ? ' open' : '';
+  const body = rows
+    .slice(0, 25)
+    .map(row => `<li><span>${escapeHtml(row.name || '—')}</span><span>${fmtPercent(row.percent)}</span></li>`)
+    .join('');
+  return `<details class="composition-details"${openAttr}>
+    <summary>${escapeHtml(title)} (${rows.length})</summary>
+    <ul class="composition-list">${body}</ul>
+  </details>`;
+}
+
+function renderCompositionPie(list) {
+  const rows = Array.isArray(list) ? list.filter(r => r && r.percent != null) : [];
+  if (!rows.length) return '';
+
+  const top = rows.slice(0, 8);
+  const sumTop = top.reduce((s, r) => s + Number(r.percent || 0), 0);
+  const other = Math.max(0, roundNum(100 - sumTop, 2));
+  const segments = [...top];
+  if (other > 0.01) segments.push({ name: 'Прочие', percent: other });
+
+  let start = 0;
+  const gradientParts = segments.map((s, i) => {
+    const value = Number(s.percent || 0);
+    const end = start + value;
+    const color = CHART_COLORS[i % CHART_COLORS.length];
+    const part = `${color} ${start}% ${end}%`;
+    start = end;
+    return part;
+  });
+
+  const legend = segments.slice(0, 6).map((s, i) => {
+    const color = CHART_COLORS[i % CHART_COLORS.length];
+    return `<li>
+      <span><span class="composition-dot" style="background:${color}"></span>${escapeHtml(s.name)}</span>
+      <span>${fmtPercent(s.percent)}</span>
+    </li>`;
+  }).join('');
+
+  return `<div class="composition-pie-row">
+    <div class="composition-pie" style="background:conic-gradient(${gradientParts.join(',')});"></div>
+    <ul class="composition-pie-legend">${legend}</ul>
+  </div>`;
+}
+
+function renderCompositionChanges(changes) {
+  const previousDate = changes && changes.previous_date ? formatDateHuman(changes.previous_date) : null;
+  const bought = changes && Array.isArray(changes.bought) ? changes.bought : [];
+  const sold = changes && Array.isArray(changes.sold) ? changes.sold : [];
+
+  if (!previousDate) {
+    return `<div class="composition-change-block">
+      <div class="composition-change-title">Изменения бумаг</div>
+      <div class="composition-change-empty">Пока нет предыдущего среза для сравнения.</div>
+    </div>`;
+  }
+
+  const buyRows = bought.slice(0, 8).map(r =>
+    `<li><span>${escapeHtml(r.name)}</span><span>+${fmtPercent(r.delta)}</span></li>`
+  ).join('');
+  const sellRows = sold.slice(0, 8).map(r =>
+    `<li><span>${escapeHtml(r.name)}</span><span>-${fmtPercent(r.delta)}</span></li>`
+  ).join('');
+  const emptyRow = '<div class="composition-change-empty">без изменений</div>';
+
+  return `<div class="composition-change-block">
+    <div class="composition-change-title">Изменения бумаг (сравнение с ${escapeHtml(previousDate)})</div>
+    <div class="composition-change-grid">
+      <div class="composition-change-col buy">
+        <h5>Купили / увеличили</h5>
+        ${buyRows ? `<ul class="composition-change-list">${buyRows}</ul>` : emptyRow}
+      </div>
+      <div class="composition-change-col sell">
+        <h5>Продали / сократили</h5>
+        ${sellRows ? `<ul class="composition-change-list">${sellRows}</ul>` : emptyRow}
+      </div>
+    </div>
+  </div>`;
+}
+
+function roundNum(value, digits = 2) {
+  if (value == null || !isFinite(value)) return 0;
+  const f = 10 ** digits;
+  return Math.round(Number(value) * f) / f;
+}
+
+function formatDateHuman(value) {
+  const s = String(value || '').trim();
+  const m = s.match(/^(\\d{4})-(\\d{2})-(\\d{2})$/);
+  if (!m) return s || '—';
+  return `${m[3]}.${m[2]}.${m[1]}`;
+}
+
+function fmtPercent(val) {
+  if (val == null || !isFinite(val)) return '—';
+  return Number(val).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '%';
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function escapeAttr(value) {
+  return escapeHtml(value).replace(/`/g, '&#96;');
+}
+
+// ============================================================
+// SHARED: Chart.js rendering helpers
+// ============================================================
+function renderStackedAreaChart(canvasId, tsData, metric, fromDate, freq, groupOrder, chartsObj, divisor, suffix) {
+  const store = (chartsObj === 'mktCharts') ? mktCharts : mcCharts;
+  if (store[canvasId]) store[canvasId].destroy();
+
+  const { dates, filteredData } = filterTimeseriesData(tsData, metric, fromDate, freq, groupOrder);
+  if (dates.length === 0) return;
+
+  const datasets = groupOrder.filter(g => filteredData[g]).map((g, i) => ({
+    label: g,
+    data: filteredData[g],
+    backgroundColor: hexToRgba(CHART_COLORS[i % CHART_COLORS.length], 0.6),
+    borderColor: CHART_COLORS[i % CHART_COLORS.length],
+    borderWidth: 1,
+    fill: true,
+    pointRadius: 0,
+    tension: 0.1,
+  }));
+
+  const canvas = document.getElementById(canvasId);
+  store[canvasId] = new Chart(canvas, {
+    type: 'line',
+    data: { labels: dates, datasets },
+    options: getChartJSOpts(divisor, suffix, true),
+  });
+}
+
+function renderStackedBarChart(canvasId, tsData, metric, fromDate, freq, groupOrder, chartsObj, divisor, suffix) {
+  const store = (chartsObj === 'mktCharts') ? mktCharts : mcCharts;
+  if (store[canvasId]) store[canvasId].destroy();
+
+  const { dates, filteredData } = filterTimeseriesData(tsData, metric, fromDate, freq, groupOrder);
+  if (dates.length === 0) return;
+
+  const datasets = groupOrder.filter(g => filteredData[g]).map((g, i) => ({
+    label: g,
+    data: filteredData[g],
+    backgroundColor: hexToRgba(CHART_COLORS[i % CHART_COLORS.length], 0.7),
+    borderColor: CHART_COLORS[i % CHART_COLORS.length],
+    borderWidth: 1,
+  }));
+
+  const canvas = document.getElementById(canvasId);
+  store[canvasId] = new Chart(canvas, {
+    type: 'bar',
+    data: { labels: dates, datasets },
+    options: getChartJSOpts(divisor, suffix, false, true),
+  });
+}
+
+function filterTimeseriesData(tsData, metric, fromDate, freq, groupOrder) {
+  if (!tsData || !tsData.dates) return { dates: [], filteredData: {} };
+
+  // Filter by date
+  let startIdx = 0;
+  if (fromDate) {
+    startIdx = tsData.dates.findIndex(d => d >= fromDate);
+    if (startIdx < 0) startIdx = 0;
+  }
+
+  let dates = tsData.dates.slice(startIdx);
+  const rawData = {};
+  groupOrder.forEach(g => {
+    if (tsData.data[g]) rawData[g] = tsData.data[g][metric].slice(startIdx);
+  });
+
+  // Aggregate by frequency
+  if (freq !== 'day' && dates.length > 0) {
+    const aggResult = aggregateTimeseriesFreq(dates, rawData, freq, metric);
+    dates = aggResult.dates;
+    Object.assign(rawData, aggResult.data);
+  }
+
+  // Remove dates where all groups have null/0 values (holidays, missing data)
+  const validIndices = [];
+  for (let i = 0; i < dates.length; i++) {
+    const hasData = Object.keys(rawData).some(g => rawData[g][i] != null && rawData[g][i] !== 0);
+    if (hasData) validIndices.push(i);
+  }
+  dates = validIndices.map(i => dates[i]);
+  for (const g of Object.keys(rawData)) {
+    rawData[g] = validIndices.map(i => rawData[g][i]);
+  }
+
+  // Convert to display values (null-safe)
+  const filteredData = {};
+  for (const g of Object.keys(rawData)) {
+    filteredData[g] = rawData[g].map(v => v != null ? v : 0);
+  }
+
+  return { dates, filteredData };
+}
+
+function aggregateTimeseriesFreq(dates, data, freq, metric) {
+  const buckets = new Map();
+  for (let i = 0; i < dates.length; i++) {
+    const key = getAggKey(dates[i], freq);
+    if (!buckets.has(key)) buckets.set(key, { date: dates[i], indices: [] });
+    buckets.get(key).indices.push(i);
+    buckets.get(key).date = dates[i]; // last date in bucket
+  }
+
+  const newDates = [];
+  const newData = {};
+  for (const g of Object.keys(data)) newData[g] = [];
+
+  for (const [, bucket] of buckets) {
+    newDates.push(bucket.date);
+    for (const g of Object.keys(data)) {
+      if (metric === 'flow') {
+        // Sum flows
+        const sum = bucket.indices.reduce((s, idx) => s + (data[g][idx] || 0), 0);
+        newData[g].push(sum);
+      } else {
+        // Last value for AUM
+        const lastIdx = bucket.indices[bucket.indices.length - 1];
+        newData[g].push(data[g][lastIdx]);
+      }
+    }
+  }
+
+  return { dates: newDates, data: newData };
+}
+
+function getChartJSOpts(divisor, suffix, stacked, isBar) {
+  const gc = isDark ? 'rgba(42,58,92,0.5)' : 'rgba(0,0,0,0.06)';
+  const tc = isDark ? '#8a8aaa' : '#757575';
+  const isStacked = stacked || isBar;
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { position: 'bottom', labels: { color: tc, usePointStyle: true, pointStyle: 'rect', padding: 12, font: { size: 11 } } },
+      tooltip: {
+        callbacks: {
+          label: ctx => {
+            const v = ctx.parsed.y;
+            return `${ctx.dataset.label}: ${(v / divisor).toLocaleString('ru-RU', { maximumFractionDigits: 1 })}${suffix}`;
+          }
+        }
+      },
+    },
+    scales: {
+      x: {
+        stacked: isStacked,
+        type: 'category',
+        grid: { color: gc },
+        ticks: { color: tc, maxTicksLimit: 12, maxRotation: 0, font: { size: 10 } },
+      },
+      y: {
+        stacked: isStacked,
+        grid: { color: gc },
+        ticks: {
+          color: tc, font: { size: 10 },
+          callback: v => (v / divisor).toLocaleString('ru-RU', { maximumFractionDigits: 0 }) + suffix,
+        },
+      },
+    },
+  };
+}
+
+// ============================================================
+// SHARED: Summary tables
+// ============================================================
+function renderSummaryTable(tableId, tsData, metric, groupOrder, mode) {
+  // mode = 'pct' (AUM change %) or 'abs' (flow sum in billions)
+  if (!tsData || !tsData.dates || tsData.dates.length === 0) return;
+
+  const periods = [
+    { label: '1 День', days: 1 },
+    { label: '1 Нед', days: 7 },
+    { label: '1 мес', days: 30 },
+    { label: 'YTD', ytd: true },
+    { label: '1 Год', days: 365 },
+    { label: '3 года', days: 365 * 3 },
+    { label: '5 лет', days: 365 * 5 },
+  ];
+
+  const dates = tsData.dates;
+  const lastDate = dates[dates.length - 1];
+  const lastDateObj = fromIsoDateLocal(lastDate);
+
+  const table = document.getElementById(tableId);
+  let html = '<thead><tr><th></th>';
+  periods.forEach(p => { html += `<th>${p.label}</th>`; });
+  html += '</tr></thead><tbody>';
+
+  // Compute for each group
+  const totals = periods.map(() => ({ current: 0, past: 0, flow: 0 }));
+  const activeGroups = groupOrder.filter(g => tsData.data[g]);
+
+  activeGroups.forEach(g => {
+    const vals = tsData.data[g][metric];
+    html += `<tr><td>${escapeHtml(g)}</td>`;
+    periods.forEach((p, pi) => {
+      const targetDate = p.ytd
+        ? `${lastDateObj.getFullYear()}-01-01`
+        : subtractDays(lastDate, p.days);
+
+      if (mode === 'pct') {
+        // AUM change %
+        const currentAum = findLastValue(dates, tsData.data[g].aum, lastDate);
+        const pastAum = findClosestValue(dates, tsData.data[g].aum, targetDate);
+        const pct = pastAum > 0 ? ((currentAum / pastAum) - 1) * 100 : null;
+        html += renderSummaryCellPct(pct);
+        totals[pi].current += currentAum || 0;
+        totals[pi].past += pastAum || 0;
+      } else {
+        // Flows sum
+        const sum = sumValuesBetween(dates, vals, targetDate, lastDate);
+        html += renderSummaryCellAbs(sum);
+        totals[pi].flow += sum;
+      }
+    });
+    html += '</tr>';
+  });
+
+  // Total row
+  html += '<tr><td><b>Итого</b></td>';
+  periods.forEach((p, pi) => {
+    if (mode === 'pct') {
+      const pct = totals[pi].past > 0 ? ((totals[pi].current / totals[pi].past) - 1) * 100 : null;
+      html += renderSummaryCellPct(pct);
+    } else {
+      html += renderSummaryCellAbs(totals[pi].flow);
+    }
+  });
+  html += '</tr></tbody>';
+
+  table.innerHTML = html;
+}
+
+function renderSummaryCellPct(val) {
+  if (val == null) return '<td>--</td>';
+  const cls = val >= 0 ? 'pos' : 'neg';
+  const sign = val >= 0 ? '+' : '';
+  return `<td class="${cls}">${sign}${val.toFixed(1)}%</td>`;
+}
+
+function renderSummaryCellAbs(val) {
+  if (val == null) return '<td>--</td>';
+  const v = val / 1e9;
+  const cls = v >= 0 ? 'pos' : 'neg';
+  const sign = v >= 0 ? '+' : '';
+  return `<td class="${cls}">${sign}${v.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}</td>`;
+}
+
+function findLastValue(dates, vals, targetDate) {
+  for (let i = dates.length - 1; i >= 0; i--) {
+    if (dates[i] <= targetDate && vals[i] != null) return vals[i];
+  }
+  return null;
+}
+
+function findClosestValue(dates, vals, targetDate) {
+  // Find closest date on or before targetDate, within 7 days
+  for (let i = dates.length - 1; i >= 0; i--) {
+    if (dates[i] <= targetDate && vals[i] != null) return vals[i];
+  }
+  return null;
+}
+
+function sumValuesBetween(dates, vals, fromDate, toDate) {
+  let sum = 0;
+  for (let i = 0; i < dates.length; i++) {
+    if (dates[i] > fromDate && dates[i] <= toDate && vals[i] != null) sum += vals[i];
+  }
+  return sum;
+}
+
+function subtractDays(dateStr, days) {
+  const d = fromIsoDateLocal(dateStr);
+  d.setDate(d.getDate() - days);
+  return toIsoDateLocal(d);
+}
+
+// ============================================================
+// SHARED: Filter builders
+// ============================================================
+function buildFilterDropdown(wrapperId, filterKey, options, filtersObj, onChange) {
+  const wrapper = document.getElementById(wrapperId);
+  const btn = wrapper.querySelector('.filter-btn');
+  const dropdown = wrapper.querySelector('.filter-dropdown');
+
+  dropdown.innerHTML = options.map(opt => {
+    const checked = filtersObj[filterKey].includes(opt) ? 'checked' : '';
+    return `<label><input type="checkbox" value="${escapeAttr(opt)}" ${checked}> ${escapeHtml(opt)}</label>`;
+  }).join('');
+
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    closeAllDropdowns();
+    dropdown.classList.toggle('open');
+  });
+
+  dropdown.querySelectorAll('input').forEach(inp => {
+    inp.addEventListener('change', () => {
+      filtersObj[filterKey] = Array.from(dropdown.querySelectorAll('input:checked')).map(i => i.value);
+      onChange();
+    });
+  });
+}
+
+function buildFundTypeFilter(wrapperId, key, stateArr, onChange) {
+  const wrapper = document.getElementById(wrapperId);
+  const btn = wrapper.querySelector('.filter-btn');
+  const dropdown = wrapper.querySelector('.filter-dropdown');
+
+  const opts = [{ val: 'открытый', label: 'ОПИФ' }, { val: 'биржевой', label: 'БПИФ' }];
+  dropdown.innerHTML = opts.map(o => {
+    const checked = stateArr.includes(o.val) ? 'checked' : '';
+    return `<label><input type="checkbox" value="${o.val}" ${checked}> ${o.label}</label>`;
+  }).join('');
+
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    closeAllDropdowns();
+    dropdown.classList.toggle('open');
+  });
+
+  dropdown.querySelectorAll('input').forEach(inp => {
+    inp.addEventListener('change', () => {
+      stateArr.length = 0;
+      dropdown.querySelectorAll('input:checked').forEach(i => stateArr.push(i.value));
+      if (stateArr.length === 0) stateArr.push('открытый', 'биржевой');
+      onChange();
+    });
+  });
+}
+
+function setupSearchAutocomplete(input, dropdown, onSelect) {
+  input.addEventListener('input', () => {
+    const q = input.value.trim().toLowerCase();
+    if (!q) { dropdown.classList.remove('open'); return; }
+    const filtered = allFunds.filter(f =>
+      (f.ticker && f.ticker.toLowerCase().includes(q)) ||
+      (f.fund_id && f.fund_id.toLowerCase().includes(q)) ||
+      (f.name || '').toLowerCase().includes(q)
+    ).slice(0, 15);
+
+    if (filtered.length === 0) { dropdown.classList.remove('open'); return; }
+    dropdown.innerHTML = filtered.map(f => {
+      const tk = f.ticker || f.fund_id || '';
+      return `<div class="item" data-id="${escapeAttr(String(f.id))}">
+        <span class="tk">${escapeHtml(tk)}</span>
+        <span class="nm">${escapeHtml(f.name || '')}</span>
+        <span class="mc">${escapeHtml(f.management_company || '')}</span>
+      </div>`;
+    }).join('');
+    dropdown.classList.add('open');
+    dropdown.querySelectorAll('.item').forEach(item => {
+      item.addEventListener('click', () => {
+        const fund = allFunds.find(f => f.id === +item.dataset.id);
+        if (fund) onSelect(fund);
+        dropdown.classList.remove('open');
+      });
+    });
+  });
+}
+
+// Close dropdowns on outside click
+document.addEventListener('click', e => {
+  if (!e.target.closest('.filter-wrap') && !e.target.closest('.search-input')) {
+    closeAllDropdowns();
+  }
+});
+
+function closeAllDropdowns() {
+  document.querySelectorAll('.filter-dropdown, .search-dropdown').forEach(d => d.classList.remove('open'));
+}
+
+// ============================================================
+// SHARED: Data utilities
+// ============================================================
+function toIsoDateLocal(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function fromIsoDateLocal(dateStr) {
+  const [y, m, d] = String(dateStr).split('-').map(Number);
+  return new Date(y, (m || 1) - 1, d || 1);
+}
+
+function getPeriodDates(period) {
+  const now = new Date();
+  const to = toIsoDateLocal(now);
+  let from;
+  switch (period) {
+    case '1M':  from = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate()); break;
+    case '3M':  from = new Date(now.getFullYear(), now.getMonth() - 3, now.getDate()); break;
+    case '6M':  from = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate()); break;
+    case 'YTD': from = new Date(now.getFullYear(), 0, 1); break;
+    case '1Y':  from = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate()); break;
+    case '3Y':  from = new Date(now.getFullYear() - 3, now.getMonth(), now.getDate()); break;
+    case '5Y':  from = new Date(now.getFullYear() - 5, now.getMonth(), now.getDate()); break;
+    case '10Y': from = new Date(now.getFullYear() - 10, now.getMonth(), now.getDate()); break;
+    case 'MAX': return { from: '1900-01-01', to };
+    default: from = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate());
+  }
+  return { from: toIsoDateLocal(from), to };
+}
+
+function getPeriodRange(period) {
+  const { from } = getPeriodDates(period);
+  return { fromDate: period === 'MAX' ? null : from };
+}
+
+function aggregateData(data, freq) {
+  if (freq === 'day' || !data || data.length === 0) return data;
+  const buckets = new Map();
+  for (const d of data) {
+    const key = getAggKey(d.time, freq);
+    if (!buckets.has(key)) buckets.set(key, { items: [], key });
+    buckets.get(key).items.push(d);
+  }
+  const result = [];
+  for (const [, bucket] of buckets) {
+    const items = bucket.items;
+    const last = items[items.length - 1];
+    const flowSum = items.reduce((s, d) => s + (d.flow || 0), 0);
+    result.push({ time: last.time, nav: last.nav, aum: last.aum, shares: last.shares, flow: +flowSum.toFixed(2) });
+  }
+  return result;
+}
+
+function getAggKey(timeStr, freq) {
+  const [y, m, d] = timeStr.split('-').map(Number);
+  if (freq === 'year') return `${y}`;
+  if (freq === 'month') return `${y}-${String(m).padStart(2, '0')}`;
+  if (freq === 'week') {
+    const date = new Date(y, m - 1, d);
+    const day = date.getDay() || 7;
+    const monday = new Date(date);
+    monday.setDate(date.getDate() - day + 1);
+    return toIsoDateLocal(monday);
+  }
+  return timeStr;
+}
+
+// ============================================================
+// SHARED: Formatting
+// ============================================================
+function fmtNum(v) {
+  if (v == null) return '\u2014';
+  return v.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+}
+
+function fmtAum(v) {
+  if (v == null) return '\u2014';
+  if (Math.abs(v) >= 1e9) return (v / 1e9).toLocaleString('ru-RU', { maximumFractionDigits: 2 }) + ' млрд';
+  if (Math.abs(v) >= 1e6) return (v / 1e6).toLocaleString('ru-RU', { maximumFractionDigits: 1 }) + ' млн';
+  return v.toLocaleString('ru-RU', { maximumFractionDigits: 0 });
+}
+
+function fmtShares(v) {
+  if (v == null) return '\u2014';
+  if (Math.abs(v) >= 1e6) return (v / 1e6).toLocaleString('ru-RU', { maximumFractionDigits: 2 }) + ' млн';
+  return v.toLocaleString('ru-RU', { maximumFractionDigits: 0 });
+}
+
+function fmtFlow(v) {
+  if (v == null) return '\u2014';
+  return (v > 0 ? '+' : '') + fmtAum(v);
+}
+
+function hexToRgba(hex, alpha) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+// ============================================================
+// START
+// ============================================================
+init();
+</script>
+</body>
+</html>
