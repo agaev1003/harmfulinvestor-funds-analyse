@@ -1,11 +1,15 @@
 const fs = require("fs/promises");
 const path = require("path");
 const cheerio = require("cheerio");
+const zlib = require("zlib");
 
 const BASE_URL = process.env.DATA_SOURCE_BASE || "https://investfunds.ru";
 const CACHE_FILE =
   process.env.DATA_CACHE_FILE ||
   path.join(__dirname, ".cache", "fund-dashboard-data.json");
+const DATASET_SEED_GZ_FILE =
+  process.env.DATASET_SEED_GZ_FILE ||
+  path.join(__dirname, "seed-cache", "fund-dashboard-data.json.gz");
 const DATASET_VERSION = Number(process.env.DATASET_VERSION || 6);
 
 const CACHE_TTL_MS = Number(process.env.DATA_CACHE_TTL_MS || 12 * 60 * 60 * 1000);
@@ -22,6 +26,9 @@ const TOP_GROUP_COUNT = Number(process.env.TOP_GROUP_COUNT || 9);
 const COMPOSITION_CACHE_FILE =
   process.env.COMPOSITION_CACHE_FILE ||
   path.join(__dirname, ".cache", "fund-compositions.json");
+const COMPOSITION_SEED_GZ_FILE =
+  process.env.COMPOSITION_SEED_GZ_FILE ||
+  path.join(__dirname, "seed-cache", "fund-compositions.json.gz");
 const COMPOSITION_CACHE_TTL_MS = Number(
   process.env.COMPOSITION_CACHE_TTL_MS || 24 * 60 * 60 * 1000
 );
@@ -48,6 +55,30 @@ const state = {
 function datasetTimestampMs(dataset) {
   const ts = Date.parse(dataset && dataset.generatedAt ? dataset.generatedAt : "");
   return Number.isFinite(ts) ? ts : Date.now();
+}
+
+async function readSeedJsonGz(filePath) {
+  try {
+    const compressed = await fs.readFile(filePath);
+    const raw = await new Promise((resolve, reject) => {
+      zlib.gunzip(compressed, (error, out) => {
+        if (error) reject(error);
+        else resolve(out);
+      });
+    });
+    return JSON.parse(raw.toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+async function persistCacheSnapshot(filePath, data) {
+  try {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, JSON.stringify(data), "utf8");
+  } catch {
+    // Non-fatal: runtime can still operate from in-memory data.
+  }
 }
 
 function normalizeSpace(value) {
@@ -1320,6 +1351,16 @@ async function ensureDiskLoaded() {
   } catch {
     // Cache file may not exist on first run
   }
+
+  if (!state.dataset) {
+    const seedData = await readSeedJsonGz(DATASET_SEED_GZ_FILE);
+    if (isValidMainDataset(seedData)) {
+      state.dataset = seedData;
+      state.loadedAt = datasetTimestampMs(seedData);
+      console.log(`[data] Loaded seed cache (${DATASET_SEED_GZ_FILE})`);
+      persistCacheSnapshot(CACHE_FILE, seedData);
+    }
+  }
 }
 
 async function getDataset() {
@@ -1379,6 +1420,18 @@ async function ensureCompositionDiskLoaded() {
     }
   } catch {
     // Cache file may not exist on first run
+  }
+
+  if (!state.compositions) {
+    const seedData = await readSeedJsonGz(COMPOSITION_SEED_GZ_FILE);
+    if (isValidCompositionDataset(seedData)) {
+      state.compositions = seedData;
+      state.compositionsLoadedAt = datasetTimestampMs(seedData);
+      console.log(
+        `[composition] Loaded seed cache (${COMPOSITION_SEED_GZ_FILE})`
+      );
+      persistCacheSnapshot(COMPOSITION_CACHE_FILE, seedData);
+    }
   }
 }
 
