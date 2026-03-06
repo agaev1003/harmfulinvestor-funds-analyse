@@ -12,47 +12,123 @@
    CSS VARIABLES & RESET
    ============================================================ */
 :root {
-  --bg-primary: #1a1a2e;
-  --bg-secondary: #16213e;
-  --bg-card: #0f3460;
-  --bg-table-row: #1e2d4d;
-  --bg-table-hover: #243555;
-  --text-primary: #e0e0e0;
-  --text-secondary: #8a8aaa;
-  --accent: #4fc3f7;
-  --accent-hover: #81d4fa;
-  --border: #2a3a5c;
-  --green: #26a69a;
-  --red: #ef5350;
-  --grid-color: rgba(42,58,92,0.5);
-  --tab-active-bg: #4fc3f7;
+  --bg-primary: #0b1020;
+  --bg-secondary: #121a30;
+  --bg-card: #1a2440;
+  --bg-table-row: #161f36;
+  --bg-table-hover: #1f2b49;
+  --text-primary: #f2f4fb;
+  --text-secondary: #9aa4c4;
+  --accent: #ff334f;
+  --accent-hover: #ff5268;
+  --border: #2a3659;
+  --green: #2bcf9a;
+  --red: #ff6675;
+  --grid-color: rgba(95, 110, 151, 0.32);
+  --tab-active-bg: #ff334f;
   --tab-active-text: #fff;
+  --favorite: #ffca52;
+  --soft-divider: rgba(255,255,255,0.08);
+  --overlay-backdrop: rgba(5, 8, 16, 0.68);
+  --bg-spot-1: rgba(255, 47, 83, 0.22);
+  --bg-spot-2: rgba(255, 104, 118, 0.12);
+  --bg-deep-1: #090d1b;
+  --bg-deep-2: #111831;
+  --bg-deep-3: #0f1630;
+  --bar-glow-strong: rgba(255, 51, 79, 0.14);
+  --bar-glow-soft: rgba(255, 51, 79, 0.03);
+  --controls-glow: rgba(255, 51, 79, 0.08);
 }
 [data-theme="light"] {
-  --bg-primary: #f0f2f5;
+  --bg-primary: #f5f6fb;
   --bg-secondary: #ffffff;
-  --bg-card: #e8eaf6;
-  --bg-table-row: #f8f9fa;
-  --bg-table-hover: #e8edf2;
-  --text-primary: #212121;
-  --text-secondary: #757575;
-  --accent: #1976d2;
-  --accent-hover: #1565c0;
-  --border: #dde0e4;
-  --green: #2e7d32;
-  --red: #c62828;
-  --grid-color: rgba(0,0,0,0.06);
-  --tab-active-bg: #1976d2;
+  --bg-card: #eceff7;
+  --bg-table-row: #f8f9fd;
+  --bg-table-hover: #eef2fb;
+  --text-primary: #141b2f;
+  --text-secondary: #606a8a;
+  --accent: #d91f3b;
+  --accent-hover: #ba102b;
+  --border: #d6dbea;
+  --green: #128a63;
+  --red: #bf1c30;
+  --grid-color: rgba(29, 39, 67, 0.09);
+  --tab-active-bg: #d91f3b;
   --tab-active-text: #fff;
+  --favorite: #c18a00;
+  --soft-divider: rgba(21,28,47,0.08);
+  --overlay-backdrop: rgba(18, 23, 38, 0.35);
+  --bg-spot-1: rgba(217, 31, 59, 0.08);
+  --bg-spot-2: rgba(217, 31, 59, 0.05);
+  --bg-deep-1: #f5f6fb;
+  --bg-deep-2: #f5f6fb;
+  --bg-deep-3: #f5f6fb;
+  --bar-glow-strong: rgba(217, 31, 59, 0.04);
+  --bar-glow-soft: rgba(217, 31, 59, 0.01);
+  --controls-glow: rgba(217, 31, 59, 0.03);
+}
+:root[data-brand-theme="strict"] {
+  --accent: #e23a4e;
+  --accent-hover: #ee5f70;
+  --bg-primary: #0d1322;
+  --bg-secondary: #151e35;
+  --bg-card: #1c2844;
+  --bg-table-row: #1a233d;
+  --bg-table-hover: #212f4f;
+  --text-secondary: #a0accb;
+  --border: #314066;
+  --grid-color: rgba(98, 114, 157, 0.3);
+  --tab-active-bg: #e23a4e;
+  --bg-spot-1: rgba(226, 58, 78, 0.16);
+  --bg-spot-2: rgba(226, 58, 78, 0.08);
+  --bar-glow-strong: rgba(226, 58, 78, 0.1);
+  --bar-glow-soft: rgba(226, 58, 78, 0.025);
+  --controls-glow: rgba(226, 58, 78, 0.055);
+}
+:root[data-theme="light"][data-brand-theme="strict"] {
+  --accent: #c82d3f;
+  --accent-hover: #b81f32;
+  --tab-active-bg: #c82d3f;
+}
+:root[data-brand-theme="aggressive"] {
+  --accent: #ff1a42;
+  --accent-hover: #ff4565;
+  --bg-primary: #080d1a;
+  --bg-secondary: #10192e;
+  --bg-card: #192642;
+  --bg-table-row: #141f38;
+  --bg-table-hover: #1c2d4e;
+  --text-primary: #f5f7ff;
+  --text-secondary: #a7b3d6;
+  --border: #2c3a63;
+  --grid-color: rgba(107, 121, 164, 0.34);
+  --tab-active-bg: #ff1a42;
+  --bg-spot-1: rgba(255, 19, 60, 0.29);
+  --bg-spot-2: rgba(255, 87, 120, 0.14);
+  --bar-glow-strong: rgba(255, 26, 66, 0.2);
+  --bar-glow-soft: rgba(255, 26, 66, 0.05);
+  --controls-glow: rgba(255, 26, 66, 0.1);
+}
+:root[data-theme="light"][data-brand-theme="aggressive"] {
+  --accent: #d4002a;
+  --accent-hover: #bf0023;
+  --tab-active-bg: #d4002a;
 }
 * { margin:0; padding:0; box-sizing:border-box; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background: var(--bg-primary);
+  background:
+    radial-gradient(60% 48% at 12% 0%, var(--bg-spot-1), rgba(255, 47, 83, 0) 72%),
+    radial-gradient(48% 44% at 88% 14%, var(--bg-spot-2), rgba(255, 104, 118, 0) 74%),
+    linear-gradient(145deg, var(--bg-deep-1) 0%, var(--bg-deep-2) 58%, var(--bg-deep-3) 100%);
+  background-attachment: fixed;
   color: var(--text-primary);
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+}
+[data-theme="light"] body {
+  background: var(--bg-primary);
 }
 
 /* ============================================================
@@ -61,11 +137,29 @@ body {
 .top-bar {
   display: flex;
   align-items: center;
-  background: var(--bg-secondary);
+  background:
+    linear-gradient(90deg, var(--bar-glow-strong) 0%, var(--bar-glow-soft) 24%, var(--bg-secondary) 58%);
   border-bottom: 2px solid var(--border);
   padding: 0 16px;
   min-height: 48px;
   gap: 0;
+}
+.brand-pill {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 14px;
+  padding-right: 14px;
+  border-right: 1px solid var(--soft-divider);
+  user-select: none;
+}
+.brand-logo-img {
+  display: block;
+  width: auto;
+  height: 30px;
+  max-width: 230px;
+  object-fit: contain;
+  filter: drop-shadow(0 1px 0 rgba(255,255,255,0.05))
+          drop-shadow(0 0 14px rgba(255, 51, 79, 0.22));
 }
 .tab-btn {
   padding: 12px 20px;
@@ -91,6 +185,18 @@ body {
   align-items: center;
   gap: 8px;
 }
+.brand-theme-select {
+  padding: 5px 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.brand-theme-select:hover { border-color: var(--accent); }
+.brand-theme-select:focus { outline: none; border-color: var(--accent); }
 .theme-toggle {
   background: var(--accent);
   border: 2px solid var(--accent);
@@ -112,9 +218,13 @@ body {
   align-items: center;
   gap: 10px;
   padding: 8px 16px;
-  background: var(--bg-secondary);
+  background: linear-gradient(90deg, var(--controls-glow) 0%, var(--bg-secondary) 28%);
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
+}
+[data-theme="light"] .top-bar,
+[data-theme="light"] .controls-bar {
+  background: var(--bg-secondary);
 }
 
 /* Filter dropdown (multi-select) */
@@ -307,7 +417,7 @@ body {
   padding: 0;
 }
 .returns-fav-btn.active {
-  color: #ffca28;
+  color: var(--favorite);
 }
 .returns-ticker-btn {
   border: none;
@@ -518,7 +628,7 @@ body {
   color: var(--text-secondary);
 }
 .composition-details {
-  border-top: 1px solid rgba(255,255,255,0.06);
+  border-top: 1px solid var(--soft-divider);
   padding-top: 6px;
   margin-top: 6px;
 }
@@ -594,7 +704,7 @@ body {
   flex-shrink: 0;
 }
 .composition-change-block {
-  border-top: 1px solid rgba(255,255,255,0.06);
+  border-top: 1px solid var(--soft-divider);
   margin-top: 8px;
   padding-top: 8px;
 }
@@ -643,7 +753,7 @@ body {
   line-height: 1;
   padding: 0;
 }
-.composition-fav-btn.active { color: #ffca28; }
+.composition-fav-btn.active { color: var(--favorite); }
 
 .composition-modal {
   position: fixed;
@@ -657,7 +767,7 @@ body {
 .composition-modal-backdrop {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.45);
+  background: var(--overlay-backdrop);
 }
 .composition-modal-dialog {
   position: absolute;
@@ -703,6 +813,36 @@ body {
   overflow: auto;
 }
 
+@media (max-width: 1220px) {
+  .top-bar {
+    flex-wrap: wrap;
+    row-gap: 6px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+  }
+  .tab-btn {
+    padding: 8px 12px;
+    font-size: 13px;
+  }
+  .top-bar-right {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 760px) {
+  .brand-pill {
+    border-right: none;
+    margin-right: 8px;
+    padding-right: 0;
+  }
+  .brand-logo-img {
+    height: 24px;
+    max-width: 180px;
+  }
+  .brand-theme-select { max-width: 120px; }
+}
+
 /* ============================================================
    LOADING OVERLAY
    ============================================================ */
@@ -727,12 +867,20 @@ body {
      TOP NAVIGATION
      ============================================================ -->
 <div class="top-bar">
+  <div class="brand-pill" title="Вредный Инвестор">
+    <img class="brand-logo-img" src="/assets/vi-logo.svg" alt="Вредный Инвестор">
+  </div>
   <button class="tab-btn active" data-tab="returns">Доходность фондов</button>
   <button class="tab-btn" data-tab="market">Рынок</button>
   <button class="tab-btn" data-tab="mc">УК</button>
   <button class="tab-btn" data-tab="fund">Фонды</button>
   <button class="tab-btn" data-tab="composition">Избранные фонды, состав</button>
   <div class="top-bar-right">
+    <select class="brand-theme-select" id="brandThemeSelect" title="Визуальный стиль">
+      <option value="signature">Баланс</option>
+      <option value="strict">Строгая</option>
+      <option value="aggressive">Агрессивная</option>
+    </select>
     <button class="theme-toggle" id="themeToggle">Light</button>
   </div>
 </div>
@@ -1072,10 +1220,30 @@ let compositionLoaded = false;
 let compositionQuery = '';
 let favoriteFundIds = new Set();
 let compositionModalFundId = null;
+let brandTheme = 'signature';
 
-const CHART_COLORS = ['#4fc3f7','#ab47bc','#ffa726','#66bb6a','#ef5350','#42a5f5','#ec407a','#78909c'];
+const BRAND_THEMES = {
+  signature: {
+    label: 'Баланс',
+    chartColors: ['#ff334f','#ff6a80','#ff9c4d','#ffd166','#35c98f','#63b9ff','#b388ff','#ff7aa8'],
+    fundColors: { nav: '#ff3f5a', aum: '#ff8f44', shares: '#6ac8ff' },
+  },
+  strict: {
+    label: 'Строгая',
+    chartColors: ['#e23a4e','#f07b8a','#d9a55a','#89c4ff','#78cf9c','#9d95ff','#c5cde6','#f0b36e'],
+    fundColors: { nav: '#e23a4e', aum: '#d9a55a', shares: '#7dbaf6' },
+  },
+  aggressive: {
+    label: 'Агрессивная',
+    chartColors: ['#ff1a42','#ff5d7a','#ff8d2a','#ffd84f','#00d19a','#2eb5ff','#9f66ff','#ff9db5'],
+    fundColors: { nav: '#ff1a42', aum: '#ff8d2a', shares: '#30c1ff' },
+  },
+};
+let CHART_COLORS = BRAND_THEMES.signature.chartColors.slice();
+let FUND_COLORS = { ...BRAND_THEMES.signature.fundColors };
 const TYPE_ORDER = ['Акции','Смешанный','Облигации','Драгметаллы','Денежный'];
 const FAVORITES_STORAGE_KEY = 'fund_dashboard_favorites_v1';
+const BRAND_THEME_STORAGE_KEY = 'fund_dashboard_brand_theme_v1';
 
 // ============================================================
 // INITIALIZATION
@@ -1083,6 +1251,7 @@ const FAVORITES_STORAGE_KEY = 'fund_dashboard_favorites_v1';
 async function init() {
   setupTabs();
   setupTheme();
+  setupBrandTheme();
   initCompositionModal();
   loadFavoriteFunds();
   await loadFundsList();
@@ -1157,6 +1326,11 @@ function onTabActivated(tabId) {
 // ============================================================
 // THEME
 // ============================================================
+function cssVar(name, fallback = '') {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value || fallback;
+}
+
 function setupTheme() {
   document.getElementById('themeToggle').addEventListener('click', () => {
     isDark = !isDark;
@@ -1164,7 +1338,54 @@ function setupTheme() {
     else document.documentElement.setAttribute('data-theme', 'light');
     document.getElementById('themeToggle').textContent = isDark ? 'Light' : 'Dark';
     updateAllChartThemes();
+    if (fundRawData.length) renderFundCharts(fundRawData);
+    if (compositionLoaded) renderCompositionCards();
+    refreshCompositionModalCard();
   });
+}
+
+function setupBrandTheme() {
+  const select = document.getElementById('brandThemeSelect');
+  if (!select) return;
+
+  const options = Object.entries(BRAND_THEMES)
+    .map(([key, cfg]) => `<option value="${escapeAttr(key)}">${escapeHtml(cfg.label)}</option>`)
+    .join('');
+  select.innerHTML = options;
+
+  const savedTheme = localStorage.getItem(BRAND_THEME_STORAGE_KEY);
+  applyBrandTheme(savedTheme || 'signature', { persist: false, rerender: false });
+
+  select.addEventListener('change', () => {
+    applyBrandTheme(select.value, { persist: true, rerender: true });
+  });
+}
+
+function applyBrandTheme(nextTheme, { persist = true, rerender = true } = {}) {
+  const key = BRAND_THEMES[nextTheme] ? nextTheme : 'signature';
+  brandTheme = key;
+  document.documentElement.setAttribute('data-brand-theme', key);
+
+  CHART_COLORS = BRAND_THEMES[key].chartColors.slice();
+  FUND_COLORS = { ...BRAND_THEMES[key].fundColors };
+
+  const select = document.getElementById('brandThemeSelect');
+  if (select && select.value !== key) select.value = key;
+  if (persist) localStorage.setItem(BRAND_THEME_STORAGE_KEY, key);
+
+  if (fundSeries.nav) fundSeries.nav.applyOptions({ color: FUND_COLORS.nav });
+  if (fundSeries.aum) fundSeries.aum.applyOptions({ color: FUND_COLORS.aum });
+  if (fundSeries.shares) fundSeries.shares.applyOptions({ color: FUND_COLORS.shares });
+
+  if (rerender) {
+    if (marketData) renderMarketCharts();
+    if (mcDetailData) renderMCCharts();
+    if (fundRawData.length) renderFundCharts(fundRawData);
+    if (compositionLoaded) renderCompositionCards();
+    refreshCompositionModalCard();
+  }
+
+  updateAllChartThemes();
 }
 
 function updateAllChartThemes() {
@@ -1175,8 +1396,8 @@ function updateAllChartThemes() {
 }
 
 function updateChartJSTheme(chart) {
-  const gc = isDark ? 'rgba(42,58,92,0.5)' : 'rgba(0,0,0,0.06)';
-  const tc = isDark ? '#8a8aaa' : '#757575';
+  const gc = cssVar('--grid-color', isDark ? 'rgba(42,58,92,0.5)' : 'rgba(0,0,0,0.06)');
+  const tc = cssVar('--text-secondary', isDark ? '#8a8aaa' : '#757575');
   if (chart.options.scales && chart.options.scales.x) {
     chart.options.scales.x.grid.color = gc;
     chart.options.scales.x.ticks.color = tc;
@@ -1189,14 +1410,17 @@ function updateChartJSTheme(chart) {
 }
 
 function getLWThemeOpts() {
+  const gridColor = cssVar('--grid-color', isDark ? 'rgba(42,58,92,0.5)' : 'rgba(0,0,0,0.06)');
+  const textColor = cssVar('--text-secondary', isDark ? '#8a8aaa' : '#757575');
+  const borderColor = cssVar('--border', isDark ? '#2a3a5c' : '#e0e0e0');
   return {
-    layout: { background: { color: 'transparent' }, textColor: isDark ? '#8a8aaa' : '#757575', fontSize: 11 },
+    layout: { background: { color: 'transparent' }, textColor, fontSize: 11 },
     grid: {
-      vertLines: { color: isDark ? 'rgba(42,58,92,0.5)' : 'rgba(0,0,0,0.06)' },
-      horzLines: { color: isDark ? 'rgba(42,58,92,0.5)' : 'rgba(0,0,0,0.06)' },
+      vertLines: { color: gridColor },
+      horzLines: { color: gridColor },
     },
-    timeScale: { borderColor: isDark ? '#2a3a5c' : '#e0e0e0' },
-    rightPriceScale: { borderColor: isDark ? '#2a3a5c' : '#e0e0e0' },
+    timeScale: { borderColor },
+    rightPriceScale: { borderColor },
   };
 }
 
@@ -1463,7 +1687,13 @@ function renderMCCharts() {
 // TAB 4: ФОНДЫ (individual fund)
 // ============================================================
 const FUND_CHART_KEYS = ['nav', 'aum', 'shares', 'flows'];
-const FUND_COLORS = { nav: '#4fc3f7', aum: '#ab47bc', shares: '#ffa726', flowUp: 'rgba(38,166,154,0.8)', flowDown: 'rgba(239,83,80,0.8)' };
+
+function getFundFlowColors() {
+  return {
+    up: hexToRgba(cssVar('--green', '#2bcf9a'), 0.82),
+    down: hexToRgba(cssVar('--red', '#ff6675'), 0.85),
+  };
+}
 
 function initTab4() {
   setupFundSearch();
@@ -1600,6 +1830,7 @@ function resizeFundCharts() {
 
 function renderFundCharts(data) {
   const agg = aggregateData(data, fundFreq);
+  const flowColors = getFundFlowColors();
 
   if (fundPctMode && agg.length > 0) {
     const base = agg[0];
@@ -1624,7 +1855,7 @@ function renderFundCharts(data) {
   }
   fundSeries.flows.setData(agg.filter(d => d.flow != null).map(d => ({
     time: d.time, value: d.flow,
-    color: d.flow >= 0 ? FUND_COLORS.flowUp : FUND_COLORS.flowDown,
+    color: d.flow >= 0 ? flowColors.up : flowColors.down,
   })));
 
   Object.values(fundCharts).forEach(c => c.timeScale().fitContent());
@@ -1729,6 +1960,14 @@ function updateCompositionModalFavButton() {
   btn.textContent = active ? '★' : '☆';
   btn.classList.toggle('active', Boolean(active));
   btn.title = active ? 'Убрать из избранного' : 'Добавить в избранное';
+}
+
+function refreshCompositionModalCard() {
+  const modal = document.getElementById('compositionModal');
+  if (!modal || !modal.classList.contains('open') || !compositionModalFundId) return;
+  const bodyEl = document.getElementById('compositionModalBody');
+  const item = findCompositionByFundId(compositionModalFundId);
+  if (bodyEl && item) bodyEl.innerHTML = renderCompositionCard(item);
 }
 
 async function openCompositionModalByFundId(fundId) {
@@ -2098,8 +2337,8 @@ function aggregateTimeseriesFreq(dates, data, freq, metric) {
 }
 
 function getChartJSOpts(divisor, suffix, stacked, isBar) {
-  const gc = isDark ? 'rgba(42,58,92,0.5)' : 'rgba(0,0,0,0.06)';
-  const tc = isDark ? '#8a8aaa' : '#757575';
+  const gc = cssVar('--grid-color', isDark ? 'rgba(42,58,92,0.5)' : 'rgba(0,0,0,0.06)');
+  const tc = cssVar('--text-secondary', isDark ? '#8a8aaa' : '#757575');
   const isStacked = stacked || isBar;
   return {
     responsive: true,
