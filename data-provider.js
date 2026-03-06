@@ -3,6 +3,7 @@ const path = require("path");
 const cheerio = require("cheerio");
 const zlib = require("zlib");
 
+const IS_RENDER = Boolean(process.env.RENDER);
 const BASE_URL = process.env.DATA_SOURCE_BASE || "https://investfunds.ru";
 const CACHE_FILE =
   process.env.DATA_CACHE_FILE ||
@@ -12,14 +13,19 @@ const DATASET_SEED_GZ_FILE =
   path.join(__dirname, "seed-cache", "fund-dashboard-data.json.gz");
 const DATASET_VERSION = Number(process.env.DATASET_VERSION || 6);
 
-const CACHE_TTL_MS = Number(process.env.DATA_CACHE_TTL_MS || 12 * 60 * 60 * 1000);
+const CACHE_TTL_MS = Number(
+  process.env.DATA_CACHE_TTL_MS ||
+    (IS_RENDER ? 24 * 60 * 60 * 1000 : 12 * 60 * 60 * 1000)
+);
 const REQUEST_TIMEOUT_MS = Number(process.env.DATA_REQUEST_TIMEOUT_MS || 25_000);
 const MAX_LIST_PAGES = Number(process.env.MAX_LIST_PAGES || 75);
-const LIST_CONCURRENCY = Number(process.env.LIST_CONCURRENCY || 8);
-const DETAIL_CONCURRENCY = Number(process.env.DETAIL_CONCURRENCY || 16);
-const HISTORY_BATCH_SIZE = Number(process.env.HISTORY_BATCH_SIZE || 48);
+const LIST_CONCURRENCY = Number(process.env.LIST_CONCURRENCY || (IS_RENDER ? 6 : 8));
+const DETAIL_CONCURRENCY = Number(
+  process.env.DETAIL_CONCURRENCY || (IS_RENDER ? 10 : 16)
+);
+const HISTORY_BATCH_SIZE = Number(process.env.HISTORY_BATCH_SIZE || (IS_RENDER ? 32 : 48));
 const HISTORY_BATCH_CONCURRENCY = Number(
-  process.env.HISTORY_BATCH_CONCURRENCY || 6
+  process.env.HISTORY_BATCH_CONCURRENCY || (IS_RENDER ? 4 : 6)
 );
 const HISTORY_LOOKBACK_DAYS = Number(process.env.HISTORY_LOOKBACK_DAYS || 14);
 const TOP_GROUP_COUNT = Number(process.env.TOP_GROUP_COUNT || 9);
@@ -30,9 +36,12 @@ const COMPOSITION_SEED_GZ_FILE =
   process.env.COMPOSITION_SEED_GZ_FILE ||
   path.join(__dirname, "seed-cache", "fund-compositions.json.gz");
 const COMPOSITION_CACHE_TTL_MS = Number(
-  process.env.COMPOSITION_CACHE_TTL_MS || 24 * 60 * 60 * 1000
+  process.env.COMPOSITION_CACHE_TTL_MS ||
+    (IS_RENDER ? 48 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000)
 );
-const COMPOSITION_CONCURRENCY = Number(process.env.COMPOSITION_CONCURRENCY || 8);
+const COMPOSITION_CONCURRENCY = Number(
+  process.env.COMPOSITION_CONCURRENCY || (IS_RENDER ? 5 : 8)
+);
 const COMPOSITION_DATASET_VERSION = Number(
   process.env.COMPOSITION_DATASET_VERSION || 4
 );

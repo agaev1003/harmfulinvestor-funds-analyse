@@ -4,6 +4,58 @@ const provider = require("./data-provider");
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
+const API_CACHE_TTL_MS = Number(process.env.API_CACHE_TTL_MS || 60_000);
+const NAV_API_CACHE_TTL_MS = Number(process.env.NAV_API_CACHE_TTL_MS || 120_000);
+const API_CACHE_MAX_ENTRIES = Number(process.env.API_CACHE_MAX_ENTRIES || 300);
+const apiCache = new Map();
+
+function getApiCacheKey(req) {
+  const params = new URLSearchParams();
+  const queryEntries = Object.entries(req.query || {}).sort(([a], [b]) =>
+    a.localeCompare(b, "en")
+  );
+  for (const [key, value] of queryEntries) {
+    if (Array.isArray(value)) {
+      for (const v of value) params.append(key, String(v));
+    } else if (value != null) {
+      params.set(key, String(value));
+    }
+  }
+  const qs = params.toString();
+  return qs ? `${req.path}?${qs}` : req.path;
+}
+
+function getCachedJson(key) {
+  const entry = apiCache.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    apiCache.delete(key);
+    return null;
+  }
+  return entry.payload;
+}
+
+function setCachedJson(key, payload, ttlMs) {
+  if (!Number.isFinite(ttlMs) || ttlMs <= 0) return;
+  if (apiCache.size >= API_CACHE_MAX_ENTRIES) {
+    const oldestKey = apiCache.keys().next().value;
+    if (oldestKey) apiCache.delete(oldestKey);
+  }
+  apiCache.set(key, { payload, expiresAt: Date.now() + ttlMs });
+}
+
+function invalidateApiCacheByPrefix(prefix) {
+  for (const key of [...apiCache.keys()]) {
+    if (key === prefix || key.startsWith(`${prefix}?`)) {
+      apiCache.delete(key);
+    }
+  }
+}
+
+function sendJson(res, payload, cacheControl) {
+  if (cacheControl) res.set("Cache-Control", cacheControl);
+  res.json(payload);
+}
 
 function parseFromTo(query) {
   const normalizeIsoDate = (value) => {
@@ -23,8 +75,16 @@ function parseFromTo(query) {
 
 app.get("/api/funds", async (req, res) => {
   try {
+    const cacheKey = getApiCacheKey(req);
+    const cached = getCachedJson(cacheKey);
+    if (cached) {
+      sendJson(res, cached, "public, max-age=60");
+      return;
+    }
+
     const data = await provider.getFunds();
-    res.json(data);
+    setCachedJson(cacheKey, data, API_CACHE_TTL_MS);
+    sendJson(res, data, "public, max-age=60");
   } catch (error) {
     res.status(500).json({
       error: "Не удалось сформировать список фондов",
@@ -34,16 +94,28 @@ app.get("/api/funds", async (req, res) => {
 });
 
 app.get("/api/healthz", (req, res) => {
-  res.json({
-    ok: true,
-    ts: new Date().toISOString(),
-  });
+  sendJson(
+    res,
+    {
+      ok: true,
+      ts: new Date().toISOString(),
+    },
+    "no-store"
+  );
 });
 
 app.get("/api/returns", async (req, res) => {
   try {
+    const cacheKey = getApiCacheKey(req);
+    const cached = getCachedJson(cacheKey);
+    if (cached) {
+      sendJson(res, cached, "public, max-age=60");
+      return;
+    }
+
     const data = await provider.getReturns();
-    res.json(data);
+    setCachedJson(cacheKey, data, API_CACHE_TTL_MS);
+    sendJson(res, data, "public, max-age=60");
   } catch (error) {
     res.status(500).json({
       error: "Не удалось сформировать доходности фондов",
@@ -58,8 +130,24 @@ app.get("/api/compositions", async (req, res) => {
       req.query.refresh != null &&
       String(req.query.refresh).toLowerCase() !== "0" &&
       String(req.query.refresh).toLowerCase() !== "false";
-    const data = await provider.getFundCompositions(forceRefresh);
-    res.json(data);
+
+    if (!forceRefresh) {
+      const cacheKey = getApiCacheKey(req);
+      const cached = getCachedJson(cacheKey);
+      if (cached) {
+        sendJson(res, cached, "public, max-age=60");
+        return;
+      }
+      const data = await provider.getFundCompositions(false);
+      setCachedJson(cacheKey, data, API_CACHE_TTL_MS);
+      sendJson(res, data, "public, max-age=60");
+      return;
+    }
+
+    const data = await provider.getFundCompositions(true);
+    invalidateApiCacheByPrefix("/api/compositions");
+    setCachedJson("/api/compositions", data, API_CACHE_TTL_MS);
+    sendJson(res, data, "no-store");
   } catch (error) {
     res.status(500).json({
       error: "Не удалось сформировать составы фондов",
@@ -70,9 +158,17 @@ app.get("/api/compositions", async (req, res) => {
 
 app.get("/api/market", async (req, res) => {
   try {
+    const cacheKey = getApiCacheKey(req);
+    const cached = getCachedJson(cacheKey);
+    if (cached) {
+      sendJson(res, cached, "public, max-age=30");
+      return;
+    }
+
     const fundType = req.query.fund_type ? String(req.query.fund_type) : "all";
     const data = await provider.getMarketData(fundType);
-    res.json(data);
+    setCachedJson(cacheKey, data, API_CACHE_TTL_MS);
+    sendJson(res, data, "public, max-age=30");
   } catch (error) {
     res.status(500).json({
       error: "Не удалось сформировать данные вкладки Рынок",
@@ -83,10 +179,18 @@ app.get("/api/market", async (req, res) => {
 
 app.get("/api/mc-detail", async (req, res) => {
   try {
+    const cacheKey = getApiCacheKey(req);
+    const cached = getCachedJson(cacheKey);
+    if (cached) {
+      sendJson(res, cached, "public, max-age=30");
+      return;
+    }
+
     const mc = req.query.mc ? String(req.query.mc) : "";
     const fundType = req.query.fund_type ? String(req.query.fund_type) : "all";
     const data = await provider.getMCDetail(mc, fundType);
-    res.json(data);
+    setCachedJson(cacheKey, data, API_CACHE_TTL_MS);
+    sendJson(res, data, "public, max-age=30");
   } catch (error) {
     res.status(500).json({
       error: "Не удалось сформировать данные вкладки УК",
@@ -97,6 +201,13 @@ app.get("/api/mc-detail", async (req, res) => {
 
 app.get("/api/nav/:id", async (req, res) => {
   try {
+    const cacheKey = getApiCacheKey(req);
+    const cached = getCachedJson(cacheKey);
+    if (cached) {
+      sendJson(res, cached, "public, max-age=120");
+      return;
+    }
+
     const fundId = Number(req.params.id);
     if (!Number.isFinite(fundId)) {
       res.status(400).json({ error: "Некорректный id фонда" });
@@ -111,7 +222,9 @@ app.get("/api/nav/:id", async (req, res) => {
       return;
     }
 
-    res.json({ data });
+    const payload = { data };
+    setCachedJson(cacheKey, payload, NAV_API_CACHE_TTL_MS);
+    sendJson(res, payload, "public, max-age=120");
   } catch (error) {
     res.status(500).json({
       error: "Не удалось загрузить историю фонда",
@@ -123,12 +236,16 @@ app.get("/api/nav/:id", async (req, res) => {
 app.get("/api/status", async (req, res) => {
   try {
     const ds = await provider.getDataset();
-    res.json({
-      ok: true,
-      generatedAt: ds.generatedAt,
-      funds: ds.funds.length,
-      source: ds.source,
-    });
+    sendJson(
+      res,
+      {
+        ok: true,
+        generatedAt: ds.generatedAt,
+        funds: ds.funds.length,
+        source: ds.source,
+      },
+      "no-store"
+    );
   } catch (error) {
     res.status(500).json({
       ok: false,
@@ -137,7 +254,18 @@ app.get("/api/status", async (req, res) => {
   }
 });
 
-app.use(express.static(path.join(__dirname, "public")));
+app.use(
+  express.static(path.join(__dirname, "public"), {
+    etag: true,
+    setHeaders(res, filePath) {
+      if (path.basename(filePath) === "index.html") {
+        res.setHeader("Cache-Control", "no-cache");
+      } else {
+        res.setHeader("Cache-Control", "public, max-age=604800, immutable");
+      }
+    },
+  })
+);
 
 app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));

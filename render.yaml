@@ -9,3 +9,17 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 22
+      - key: DATA_CACHE_TTL_MS
+        value: 86400000
+      - key: COMPOSITION_CACHE_TTL_MS
+        value: 172800000
+      - key: LIST_CONCURRENCY
+        value: 6
+      - key: DETAIL_CONCURRENCY
+        value: 10
+      - key: HISTORY_BATCH_SIZE
+        value: 32
+      - key: HISTORY_BATCH_CONCURRENCY
+        value: 4
+      - key: COMPOSITION_CONCURRENCY
+        value: 5
