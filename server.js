@@ -33,6 +33,13 @@ app.get("/api/funds", async (req, res) => {
   }
 });
 
+app.get("/api/healthz", (req, res) => {
+  res.json({
+    ok: true,
+    ts: new Date().toISOString(),
+  });
+});
+
 app.get("/api/returns", async (req, res) => {
   try {
     const data = await provider.getReturns();

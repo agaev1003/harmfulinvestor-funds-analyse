@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: fondy-analitika
+    env: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/healthz
+    envVars:
+      - key: NODE_VERSION
+        value: 22
