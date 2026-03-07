@@ -45,6 +45,22 @@ const COMPOSITION_CONCURRENCY = Number(
 const COMPOSITION_DATASET_VERSION = Number(
   process.env.COMPOSITION_DATASET_VERSION || 4
 );
+const STALE_MARK_DAYS = Number(process.env.STALE_MARK_DAYS || 45);
+const COMPOSITION_DELTA_MAX_PER_RUN = Number(
+  process.env.COMPOSITION_DELTA_MAX_PER_RUN || (IS_RENDER ? 90 : 160)
+);
+const COMPOSITION_DELTA_MAX_FORCE_RUN = Number(
+  process.env.COMPOSITION_DELTA_MAX_FORCE_RUN || (IS_RENDER ? 180 : 320)
+);
+const COMPOSITION_ITEM_REFRESH_DAYS = Number(
+  process.env.COMPOSITION_ITEM_REFRESH_DAYS || 10
+);
+const COMPOSITION_MISSING_RECHECK_DAYS = Number(
+  process.env.COMPOSITION_MISSING_RECHECK_DAYS || 4
+);
+const RANKING_SCAN_TTL_MS = Number(
+  process.env.RANKING_SCAN_TTL_MS || (IS_RENDER ? 6 * 60 * 60 * 1000 : 60 * 60 * 1000)
+);
 
 const DATE_FMT_MSK = new Intl.DateTimeFormat("sv-SE", {
   timeZone: "Europe/Moscow",
@@ -59,11 +75,43 @@ const state = {
   compositionsLoadedAt: 0,
   compositionsDiskLoaded: false,
   compositionsBuildPromise: null,
+  rankingIds: null,
+  rankingIdsLoadedAt: 0,
 };
 
 function datasetTimestampMs(dataset) {
   const ts = Date.parse(dataset && dataset.generatedAt ? dataset.generatedAt : "");
   return Number.isFinite(ts) ? ts : Date.now();
+}
+
+function parseIsoDateParts(isoDate) {
+  const match = String(isoDate || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+    return null;
+  }
+  return { year, month, day };
+}
+
+function ageDaysFromIsoDate(isoDate, now = new Date()) {
+  const parts = parseIsoDateParts(isoDate);
+  if (!parts) return null;
+  const fromUtc = Date.UTC(parts.year, parts.month - 1, parts.day);
+  const nowUtc = Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate()
+  );
+  return Math.max(0, Math.floor((nowUtc - fromUtc) / 86_400_000));
+}
+
+function ageDaysFromTimestamp(value, nowMs = Date.now()) {
+  const ts = Date.parse(String(value || ""));
+  if (!Number.isFinite(ts)) return null;
+  return Math.max(0, Math.floor((nowMs - ts) / 86_400_000));
 }
 
 async function readSeedJsonGz(filePath) {
@@ -380,27 +428,44 @@ function parseInvestfundsStructureFromHtml(html) {
   };
 }
 
-function loadPreviousCompositionItems() {
-  return fs
-    .readFile(COMPOSITION_CACHE_FILE, "utf8")
-    .then((raw) => {
-      const parsed = JSON.parse(raw);
-      return parsed && Array.isArray(parsed.items) ? parsed.items : [];
-    })
-    .catch(() => []);
+async function loadPreviousCompositionDataset() {
+  try {
+    const raw = await fs.readFile(COMPOSITION_CACHE_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    const items =
+      parsed && Array.isArray(parsed.items)
+        ? parsed.items.filter((item) => item && item.id != null)
+        : [];
+    const checksById =
+      parsed && parsed.checksById && typeof parsed.checksById === "object"
+        ? parsed.checksById
+        : {};
+    return { items, checksById };
+  } catch {
+    return { items: [], checksById: {} };
+  }
 }
 
-async function fetchRankingFundIds() {
+async function fetchRankingFundIds({ force = false } = {}) {
+  const hasFreshCache =
+    !force &&
+    Array.isArray(state.rankingIds) &&
+    Date.now() - state.rankingIdsLoadedAt <= RANKING_SCAN_TTL_MS;
+  if (hasFreshCache) return state.rankingIds;
+
   try {
     const html = await fetchText(`${BASE_URL}/fund-rankings/fund-yield/`);
     const ids = [...html.matchAll(/\/funds\/(\d+)\/?/g)]
       .map((m) => Number(m[1]))
       .filter((id) => Number.isFinite(id));
-    return [...new Set(ids)];
+    state.rankingIds = [...new Set(ids)];
+    state.rankingIdsLoadedAt = Date.now();
+    return state.rankingIds;
   } catch (error) {
     console.warn(
       `[composition] Ranking scan failed: ${String(error.message || error)}`
     );
+    if (Array.isArray(state.rankingIds)) return state.rankingIds;
     return [];
   }
 }
@@ -484,9 +549,102 @@ function buildCompositionChanges(currentIssuers, previousIssuers, previousDate) 
   };
 }
 
-async function buildCompositionsDataset() {
+function shouldRefreshCompositionCandidate(
+  candidateId,
+  previousById,
+  checksById,
+  { nowMs, forceRefresh }
+) {
+  const id = String(candidateId);
+  const previous = previousById.get(id) || null;
+  const check = checksById[id] || null;
+  if (!check && !previous) return true;
+
+  const checkedAt = (check && check.checked_at) || (previous && previous.checked_at);
+  const checkedAge = ageDaysFromTimestamp(checkedAt, nowMs);
+
+  // If never checked properly, refresh first.
+  if (checkedAge == null) return true;
+
+  if (forceRefresh) {
+    // In forced mode we still do delta refresh, but with larger quota and faster recheck thresholds.
+    if (check && check.has_structure === false) {
+      return checkedAge >= Math.max(1, Math.floor(COMPOSITION_MISSING_RECHECK_DAYS / 2));
+    }
+    return checkedAge >= Math.max(1, Math.floor(COMPOSITION_ITEM_REFRESH_DAYS / 2));
+  }
+
+  if (check && check.has_structure === false) {
+    return checkedAge >= COMPOSITION_MISSING_RECHECK_DAYS;
+  }
+
+  const structureDate =
+    (check && check.structure_date) || (previous && previous.structure_date) || null;
+  const structureAge = ageDaysFromIsoDate(structureDate);
+  if (structureAge != null && structureAge >= COMPOSITION_ITEM_REFRESH_DAYS) {
+    return true;
+  }
+
+  return checkedAge >= COMPOSITION_ITEM_REFRESH_DAYS;
+}
+
+function pickCompositionRefreshCandidates(
+  candidates,
+  previousById,
+  checksById,
+  { forceRefresh = false } = {}
+) {
+  if (!Array.isArray(candidates) || !candidates.length) return [];
+  const nowMs = Date.now();
+  const maxToRefresh = forceRefresh
+    ? COMPOSITION_DELTA_MAX_FORCE_RUN
+    : COMPOSITION_DELTA_MAX_PER_RUN;
+
+  const ranked = [];
+  for (const candidate of candidates) {
+    const id = String(candidate.id);
+    if (
+      !shouldRefreshCompositionCandidate(id, previousById, checksById, {
+        nowMs,
+        forceRefresh,
+      })
+    ) {
+      continue;
+    }
+
+    const previous = previousById.get(id) || null;
+    const check = checksById[id] || null;
+    const checkedAt = (check && check.checked_at) || (previous && previous.checked_at);
+    const checkedAge = ageDaysFromTimestamp(checkedAt, nowMs);
+    const structureDate =
+      (check && check.structure_date) || (previous && previous.structure_date) || null;
+    const structureAge = ageDaysFromIsoDate(structureDate);
+
+    let score = 0;
+    if (!check && !previous) {
+      score = 1_000_000;
+    } else if (check && check.has_structure === false) {
+      score = 800_000 + (checkedAge || 0);
+    } else {
+      score = 600_000 + Math.max(checkedAge || 0, structureAge || 0);
+    }
+
+    ranked.push({ candidate, score });
+  }
+
+  ranked.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return String(a.candidate.id).localeCompare(String(b.candidate.id), "en");
+  });
+
+  return ranked.slice(0, Math.max(1, maxToRefresh)).map((entry) => entry.candidate);
+}
+
+async function buildCompositionsDataset({ forceRefresh = false } = {}) {
   const startedAt = Date.now();
-  console.log("[composition] Build started...");
+  console.log(
+    `[composition] Build started... mode=${forceRefresh ? "forced-delta" : "delta"}`
+  );
   const ds = await getDataset();
   const rankingIds = await fetchRankingFundIds();
   const candidatesById = new Map(
@@ -510,22 +668,67 @@ async function buildCompositionsDataset() {
   }
   const candidates = [...candidatesById.values()];
 
-  const previousItems = await loadPreviousCompositionItems();
+  const previousDataset = await loadPreviousCompositionDataset();
+  const previousItems = previousDataset.items;
+  const previousChecksById =
+    previousDataset.checksById && typeof previousDataset.checksById === "object"
+      ? previousDataset.checksById
+      : {};
   const previousById = new Map(
     previousItems
       .filter((item) => item && item.id != null)
       .map((item) => [String(item.id), item])
   );
 
-  const withStructure = await mapLimit(
+  const checksById = { ...previousChecksById };
+  const refreshCandidates = pickCompositionRefreshCandidates(
     candidates,
+    previousById,
+    previousChecksById,
+    { forceRefresh }
+  );
+
+  if (!refreshCandidates.length && previousItems.length) {
+    console.log("[composition] Delta build skipped: no due candidates.");
+    return {
+      version: COMPOSITION_DATASET_VERSION,
+      source: `${BASE_URL} + /fund-rankings/fund-yield/`,
+      generatedAt:
+        (state.compositions && state.compositions.generatedAt) ||
+        new Date().toISOString(),
+      fundUniverse: candidates.length,
+      refreshedCount: 0,
+      checksById,
+      items: previousItems
+        .slice()
+        .sort((a, b) =>
+          String(a.name || "").localeCompare(String(b.name || ""), "ru")
+        ),
+    };
+  }
+
+  console.log(
+    `[composition] Delta candidates: ${refreshCandidates.length}/${candidates.length}`
+  );
+
+  const withStructure = await mapLimit(
+    refreshCandidates,
     COMPOSITION_CONCURRENCY,
     async (candidate, idx) => {
+      const candidateId = String(candidate.id);
+      const previous = previousById.get(candidateId) || null;
+      const checkedAt = new Date().toISOString();
       try {
         const html = await fetchText(`${BASE_URL}/funds/${candidate.id}/`);
         const structure = parseInvestfundsStructureFromHtml(html);
-        if (!structure || !structure.issuers.length) return null;
-        const previous = previousById.get(String(candidate.id)) || null;
+        if (!structure || !structure.issuers.length) {
+          checksById[candidateId] = {
+            checked_at: checkedAt,
+            has_structure: false,
+            structure_date: null,
+          };
+          return previous || null;
+        }
         const parsedMeta = parseFundMetaFromDetailHtml(html);
         const changes = buildCompositionChanges(
           structure.issuers,
@@ -540,6 +743,7 @@ async function buildCompositionsDataset() {
           management_company:
             candidate.management_company || parsedMeta.management_company || null,
           structure_date: structure.structure_date || null,
+          checked_at: checkedAt,
           issuers: structure.issuers,
           changes,
         };
@@ -549,11 +753,20 @@ async function buildCompositionsDataset() {
             error.message || error
           )}`
         );
-        return null;
+        checksById[candidateId] = {
+          checked_at: checkedAt,
+          has_structure:
+            previous && Array.isArray(previous.issuers) && previous.issuers.length > 0,
+          structure_date: previous ? previous.structure_date || null : null,
+        };
+        return previous || null;
       } finally {
-        if ((idx + 1) % 20 === 0 || idx + 1 === candidates.length) {
+        if ((idx + 1) % 20 === 0 || idx + 1 === refreshCandidates.length) {
           console.log(
-            `[composition] Parsed ${Math.min(idx + 1, candidates.length)}/${candidates.length}`
+            `[composition] Parsed ${Math.min(
+              idx + 1,
+              refreshCandidates.length
+            )}/${refreshCandidates.length}`
           );
         }
       }
@@ -561,15 +774,52 @@ async function buildCompositionsDataset() {
     { continueOnError: true }
   );
 
-  const items = withStructure
-    .filter(Boolean)
-    .sort((a, b) => a.name.localeCompare(b.name, "ru"));
+  const refreshedById = new Map();
+  for (const item of withStructure) {
+    if (!item || item.id == null) continue;
+    const id = String(item.id);
+    refreshedById.set(id, item);
+    if (!checksById[id]) {
+      checksById[id] = {
+        checked_at: item.checked_at || new Date().toISOString(),
+        has_structure: Array.isArray(item.issuers) && item.issuers.length > 0,
+        structure_date: item.structure_date || null,
+      };
+    }
+  }
+
+  const knownCandidateIds = new Set(candidates.map((c) => String(c.id)));
+  const mergedById = new Map();
+
+  // Keep previous snapshot as baseline.
+  for (const [id, item] of previousById.entries()) {
+    if (!item) continue;
+    mergedById.set(id, item);
+  }
+
+  // Apply refreshed rows on top.
+  for (const [id, item] of refreshedById.entries()) {
+    mergedById.set(id, item);
+  }
+
+  // Remove items that are definitely no longer in active universe and ranking scan.
+  for (const id of [...mergedById.keys()]) {
+    if (!knownCandidateIds.has(id)) {
+      mergedById.delete(id);
+    }
+  }
+
+  const items = [...mergedById.values()]
+    .filter((item) => item && Array.isArray(item.issuers) && item.issuers.length > 0)
+    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ru"));
 
   const dataset = {
     version: COMPOSITION_DATASET_VERSION,
     source: `${BASE_URL} + /fund-rankings/fund-yield/`,
     generatedAt: new Date().toISOString(),
     fundUniverse: candidates.length,
+    refreshedCount: refreshCandidates.length,
+    checksById,
     items,
   };
 
@@ -578,7 +828,7 @@ async function buildCompositionsDataset() {
 
   const sec = ((Date.now() - startedAt) / 1000).toFixed(1);
   console.log(
-    `[composition] Build finished in ${sec}s. Items: ${items.length}. Cache: ${COMPOSITION_CACHE_FILE}`
+    `[composition] Build finished in ${sec}s. Refreshed: ${refreshCandidates.length}. Items: ${items.length}. Cache: ${COMPOSITION_CACHE_FILE}`
   );
   return dataset;
 }
@@ -1447,39 +1697,9 @@ async function ensureCompositionDiskLoaded() {
 async function getCompositionsDataset({ forceRefresh = false } = {}) {
   await ensureCompositionDiskLoaded();
 
-  if (forceRefresh) {
-    if (!state.compositionsBuildPromise) {
-      state.compositionsBuildPromise = buildCompositionsDataset()
-        .then((data) => {
-          state.compositions = data;
-          state.compositionsLoadedAt = datasetTimestampMs(data);
-          return data;
-        })
-        .finally(() => {
-          state.compositionsBuildPromise = null;
-        });
-    }
-    return state.compositionsBuildPromise;
-  }
-
-  if (state.compositions) {
-    const isStale = Date.now() - state.compositionsLoadedAt > COMPOSITION_CACHE_TTL_MS;
-    if (isStale && !state.compositionsBuildPromise) {
-      state.compositionsBuildPromise = buildCompositionsDataset()
-        .then((data) => {
-          state.compositions = data;
-          state.compositionsLoadedAt = datasetTimestampMs(data);
-          return data;
-        })
-        .finally(() => {
-          state.compositionsBuildPromise = null;
-        });
-    }
-    return state.compositions;
-  }
-
-  if (!state.compositionsBuildPromise) {
-    state.compositionsBuildPromise = buildCompositionsDataset()
+  const startCompositionsBuild = ({ force = false } = {}) => {
+    if (state.compositionsBuildPromise) return state.compositionsBuildPromise;
+    state.compositionsBuildPromise = buildCompositionsDataset({ forceRefresh: force })
       .then((data) => {
         state.compositions = data;
         state.compositionsLoadedAt = datasetTimestampMs(data);
@@ -1488,9 +1708,26 @@ async function getCompositionsDataset({ forceRefresh = false } = {}) {
       .finally(() => {
         state.compositionsBuildPromise = null;
       });
+    return state.compositionsBuildPromise;
+  };
+
+  if (forceRefresh) {
+    // Stale-while-revalidate mode:
+    // if we already have snapshot, return it immediately and refresh in background.
+    if (state.compositions) {
+      startCompositionsBuild({ force: true });
+      return state.compositions;
+    }
+    return startCompositionsBuild({ force: true });
   }
 
-  return state.compositionsBuildPromise;
+  if (state.compositions) {
+    const isStale = Date.now() - state.compositionsLoadedAt > COMPOSITION_CACHE_TTL_MS;
+    if (isStale) startCompositionsBuild();
+    return state.compositions;
+  }
+
+  return startCompositionsBuild();
 }
 
 function filterHistoryByRange(history, from, to) {
@@ -1526,6 +1763,71 @@ async function getReturns() {
 async function getFundCompositions(forceRefresh = false) {
   const ds = await getCompositionsDataset({ forceRefresh });
   return ds.items;
+}
+
+function buildCompositionsMeta(ds) {
+  const items = ds && Array.isArray(ds.items) ? ds.items : [];
+  const now = new Date();
+  let staleCount = 0;
+  let maxAgeDays = null;
+  let latestStructureDate = null;
+
+  for (const item of items) {
+    const date = item && item.structure_date ? String(item.structure_date) : null;
+    if (!date) continue;
+    const ageDays = ageDaysFromIsoDate(date, now);
+    if (ageDays == null) continue;
+    if (ageDays >= STALE_MARK_DAYS) staleCount += 1;
+    if (maxAgeDays == null || ageDays > maxAgeDays) maxAgeDays = ageDays;
+    if (!latestStructureDate || date > latestStructureDate) latestStructureDate = date;
+  }
+
+  return {
+    generatedAt: ds && ds.generatedAt ? ds.generatedAt : null,
+    fundUniverse:
+      ds && Number.isFinite(Number(ds.fundUniverse)) ? Number(ds.fundUniverse) : null,
+    itemsCount: items.length,
+    refreshedCount:
+      ds && Number.isFinite(Number(ds.refreshedCount)) ? Number(ds.refreshedCount) : null,
+    staleMarkDays: STALE_MARK_DAYS,
+    staleCount,
+    maxAgeDays,
+    latestStructureDate: latestStructureDate || null,
+    refreshing: Boolean(state.compositionsBuildPromise),
+  };
+}
+
+async function getCompositionsPayload({ forceRefresh = false } = {}) {
+  const ds = await getCompositionsDataset({ forceRefresh });
+  return {
+    items: Array.isArray(ds.items) ? ds.items : [],
+    meta: buildCompositionsMeta(ds),
+  };
+}
+
+async function getStatusSummary() {
+  const [mainDs, compDs] = await Promise.all([
+    getDataset(),
+    getCompositionsDataset({ forceRefresh: false }),
+  ]);
+
+  const mainGeneratedAt = mainDs && mainDs.generatedAt ? mainDs.generatedAt : null;
+  const mainAgeDays = ageDaysFromTimestamp(mainGeneratedAt);
+
+  return {
+    ok: true,
+    source: mainDs && mainDs.source ? mainDs.source : BASE_URL,
+    funds:
+      mainDs && Array.isArray(mainDs.funds) ? mainDs.funds.length : 0,
+    generatedAt: mainGeneratedAt,
+    generatedAgeDays: mainAgeDays,
+    staleMarkDays: STALE_MARK_DAYS,
+    refreshing: {
+      market: Boolean(state.buildPromise),
+      compositions: Boolean(state.compositionsBuildPromise),
+    },
+    compositions: buildCompositionsMeta(compDs),
+  };
 }
 
 async function getNavByFundId(fundId, from, to) {
@@ -1608,7 +1910,9 @@ module.exports = {
   getFunds,
   getReturns,
   getFundCompositions,
+  getCompositionsPayload,
   getNavByFundId,
   getMarketData,
   getMCDetail,
+  getStatusSummary,
 };

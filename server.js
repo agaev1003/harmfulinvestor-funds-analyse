@@ -1,4 +1,5 @@
 const express = require("express");
+const compression = require("compression");
 const path = require("path");
 const provider = require("./data-provider");
 
@@ -6,8 +7,14 @@ const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const API_CACHE_TTL_MS = Number(process.env.API_CACHE_TTL_MS || 60_000);
 const NAV_API_CACHE_TTL_MS = Number(process.env.NAV_API_CACHE_TTL_MS || 120_000);
+const STATUS_API_CACHE_TTL_MS = Number(process.env.STATUS_API_CACHE_TTL_MS || 15_000);
+const COMPOSITION_API_CACHE_TTL_MS = Number(
+  process.env.COMPOSITION_API_CACHE_TTL_MS || 20_000
+);
 const API_CACHE_MAX_ENTRIES = Number(process.env.API_CACHE_MAX_ENTRIES || 300);
 const apiCache = new Map();
+
+app.use(compression({ threshold: 1024 }));
 
 function getApiCacheKey(req) {
   const params = new URLSearchParams();
@@ -135,19 +142,19 @@ app.get("/api/compositions", async (req, res) => {
       const cacheKey = getApiCacheKey(req);
       const cached = getCachedJson(cacheKey);
       if (cached) {
-        sendJson(res, cached, "public, max-age=60");
+        sendJson(res, cached, "public, max-age=15");
         return;
       }
-      const data = await provider.getFundCompositions(false);
-      setCachedJson(cacheKey, data, API_CACHE_TTL_MS);
-      sendJson(res, data, "public, max-age=60");
+      const data = await provider.getCompositionsPayload({ forceRefresh: false });
+      setCachedJson(cacheKey, data, COMPOSITION_API_CACHE_TTL_MS);
+      sendJson(res, data, "public, max-age=15");
       return;
     }
 
-    const data = await provider.getFundCompositions(true);
+    const data = await provider.getCompositionsPayload({ forceRefresh: true });
     invalidateApiCacheByPrefix("/api/compositions");
-    setCachedJson("/api/compositions", data, API_CACHE_TTL_MS);
-    sendJson(res, data, "no-store");
+    setCachedJson("/api/compositions", data, COMPOSITION_API_CACHE_TTL_MS);
+    sendJson(res, data, "public, max-age=5");
   } catch (error) {
     res.status(500).json({
       error: "Не удалось сформировать составы фондов",
@@ -235,16 +242,19 @@ app.get("/api/nav/:id", async (req, res) => {
 
 app.get("/api/status", async (req, res) => {
   try {
-    const ds = await provider.getDataset();
+    const cacheKey = getApiCacheKey(req);
+    const cached = getCachedJson(cacheKey);
+    if (cached) {
+      sendJson(res, cached, "public, max-age=10");
+      return;
+    }
+
+    const payload = await provider.getStatusSummary();
+    setCachedJson(cacheKey, payload, STATUS_API_CACHE_TTL_MS);
     sendJson(
       res,
-      {
-        ok: true,
-        generatedAt: ds.generatedAt,
-        funds: ds.funds.length,
-        source: ds.source,
-      },
-      "no-store"
+      payload,
+      "public, max-age=10"
     );
   } catch (error) {
     res.status(500).json({
@@ -274,6 +284,19 @@ app.get("*", (req, res) => {
 function startServer(port = PORT) {
   const server = app.listen(port, () => {
     console.log(`Fund dashboard (independent): http://localhost:${port}`);
+    // Preload disk/seed snapshots on cold start so first user request is fast.
+    provider
+      .getDataset()
+      .catch((error) =>
+        console.warn(`[warmup] dataset preload failed: ${String(error.message || error)}`)
+      );
+    provider
+      .getCompositionsPayload({ forceRefresh: false })
+      .catch((error) =>
+        console.warn(
+          `[warmup] compositions preload failed: ${String(error.message || error)}`
+        )
+      );
   });
   return server;
 }

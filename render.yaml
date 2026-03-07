@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: fondy-analitika
+    name: harmful-funds-analysis
     env: node
     plan: free
     buildCommand: npm ci
@@ -11,8 +11,28 @@ services:
         value: 22
       - key: DATA_CACHE_TTL_MS
         value: 86400000
+      - key: API_CACHE_TTL_MS
+        value: 120000
+      - key: NAV_API_CACHE_TTL_MS
+        value: 300000
+      - key: STATUS_API_CACHE_TTL_MS
+        value: 15000
+      - key: COMPOSITION_API_CACHE_TTL_MS
+        value: 20000
       - key: COMPOSITION_CACHE_TTL_MS
         value: 172800000
+      - key: COMPOSITION_DELTA_MAX_PER_RUN
+        value: 80
+      - key: COMPOSITION_DELTA_MAX_FORCE_RUN
+        value: 180
+      - key: COMPOSITION_ITEM_REFRESH_DAYS
+        value: 10
+      - key: COMPOSITION_MISSING_RECHECK_DAYS
+        value: 4
+      - key: RANKING_SCAN_TTL_MS
+        value: 21600000
+      - key: STALE_MARK_DAYS
+        value: 45
       - key: LIST_CONCURRENCY
         value: 6
       - key: DETAIL_CONCURRENCY
