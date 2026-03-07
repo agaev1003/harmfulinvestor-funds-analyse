@@ -24,6 +24,15 @@ const COMPOSITION_REQUEST_TIMEOUT_MS = Number(
 const COMPOSITION_REQUEST_RETRIES = Number(
   process.env.COMPOSITION_REQUEST_RETRIES || (IS_RENDER ? 0 : 1)
 );
+const SERIES_REQUEST_TIMEOUT_MS = Number(
+  process.env.SERIES_REQUEST_TIMEOUT_MS || (IS_RENDER ? 12_000 : 18_000)
+);
+const SERIES_REQUEST_RETRIES = Number(
+  process.env.SERIES_REQUEST_RETRIES || (IS_RENDER ? 0 : 1)
+);
+const SERIES_SINGLE_FALLBACK_CONCURRENCY = Number(
+  process.env.SERIES_SINGLE_FALLBACK_CONCURRENCY || (IS_RENDER ? 6 : 10)
+);
 const MAX_LIST_PAGES = Number(process.env.MAX_LIST_PAGES || 75);
 const LIST_CONCURRENCY = Number(process.env.LIST_CONCURRENCY || (IS_RENDER ? 6 : 8));
 const DETAIL_CONCURRENCY = Number(
@@ -101,6 +110,9 @@ const state = {
   compositionsBuildState: null,
   compositionsLastRun: null,
   compositionsLastError: null,
+  marketBuildState: null,
+  marketLastRun: null,
+  marketLastError: null,
   rankingIds: null,
   rankingIdsLoadedAt: 0,
 };
@@ -1172,7 +1184,11 @@ async function fetchFundSeriesBatch(
   if (!fundIds.length) return out;
 
   const url = buildChartUrl(fundIds, dataKey, dateFrom);
-  const payload = await fetchJson(url);
+  const payload = await fetchJson(
+    url,
+    SERIES_REQUEST_RETRIES,
+    { timeoutMs: SERIES_REQUEST_TIMEOUT_MS }
+  );
   const blocks = Array.isArray(payload)
     ? payload
     : payload && Array.isArray(payload.data)
@@ -1183,18 +1199,36 @@ async function fetchFundSeriesBatch(
     console.warn(
       `[data] Batch mismatch for ${dataKey}: requested=${fundIds.length}, got=${blocks.length}. Fallback to single requests.`
     );
-    for (const fundId of fundIds) {
-      const singlePayload = await fetchJson(buildChartUrl([fundId], dataKey, dateFrom));
-      const singleBlocks = Array.isArray(singlePayload)
-        ? singlePayload
-        : singlePayload && Array.isArray(singlePayload.data)
-          ? [singlePayload]
-          : [];
-      const singleRaw = singleBlocks[0] && Array.isArray(singleBlocks[0].data)
-        ? singleBlocks[0].data
-        : [];
-      out[String(fundId)] = parseChartSeries(singleRaw);
-    }
+    await mapLimit(
+      fundIds,
+      Math.max(1, Math.min(SERIES_SINGLE_FALLBACK_CONCURRENCY, fundIds.length)),
+      async (fundId) => {
+        try {
+          const singlePayload = await fetchJson(
+            buildChartUrl([fundId], dataKey, dateFrom),
+            SERIES_REQUEST_RETRIES,
+            { timeoutMs: SERIES_REQUEST_TIMEOUT_MS }
+          );
+          const singleBlocks = Array.isArray(singlePayload)
+            ? singlePayload
+            : singlePayload && Array.isArray(singlePayload.data)
+              ? [singlePayload]
+              : [];
+          const singleRaw = singleBlocks[0] && Array.isArray(singleBlocks[0].data)
+            ? singleBlocks[0].data
+            : [];
+          out[String(fundId)] = parseChartSeries(singleRaw);
+        } catch (error) {
+          console.warn(
+            `[data] Single series fetch failed for ${dataKey}/${fundId}: ${String(
+              error.message || error
+            )}`
+          );
+          out[String(fundId)] = [];
+        }
+      },
+      { continueOnError: true }
+    );
     return out;
   }
 
@@ -1502,210 +1536,319 @@ function pickTopGroupsByAum(funds, historiesById, groupKeySelector, topN = TOP_G
 
 async function buildDataset() {
   const startedAt = Date.now();
-  console.log("[data] Build started...");
+  const runStats = {
+    startedAt: new Date().toISOString(),
+    stage: "list-first-page",
+    listPages: 0,
+    listPagesParsed: 0,
+    sourceFunds: 0,
+    selectedFunds: 0,
+    rankingAdded: 0,
+    candidates: 0,
+    detailsTotal: 0,
+    detailsProcessed: 0,
+    detailFetchedCount: 0,
+    detailReusedCount: 0,
+    detailFailedCount: 0,
+    historyBatchesTotal: 0,
+    historyBatchesDone: 0,
+    historyBatchFailed: 0,
+    historyFundsTotal: 0,
+    historyFundsDone: 0,
+  };
+  state.marketBuildState = runStats;
+  state.marketLastError = null;
 
-  const firstHtml = await fetchText(`${BASE_URL}/funds/?showID=54&limit=50&page=1`);
-  const firstParsed = parseListPage(firstHtml);
-  const maxPage = Math.min(firstParsed.maxPage || 1, MAX_LIST_PAGES);
-  console.log(`[data] List pages: ${maxPage}`);
-
-  const rawRows = [...firstParsed.rows];
-  const pages = Array.from({ length: Math.max(0, maxPage - 1) }, (_, i) => i + 2);
-  if (pages.length) {
-    const pageRows = await mapLimit(
-      pages,
-      LIST_CONCURRENCY,
-      async (page, i) => {
-        const html = await fetchText(
-          `${BASE_URL}/funds/?showID=54&limit=50&page=${page}`
-        );
-        const parsed = parseListPage(html);
-        if ((i + 1) % 10 === 0 || i + 1 === pages.length) {
-          console.log(`[data] Parsed list page ${page}/${maxPage}`);
-        }
-        return parsed.rows;
-      }
+  const finalizeRun = () => {
+    const durationSec = Math.max(
+      0,
+      Math.round(((Date.now() - startedAt) / 1000) * 10) / 10
     );
-    for (const rows of pageRows) {
-      if (Array.isArray(rows)) rawRows.push(...rows);
-    }
-  }
-
-  const byId = new Map();
-  for (const row of rawRows) {
-    if (!row.id) continue;
-    if (!byId.has(row.id)) byId.set(row.id, row);
-  }
-  const uniqueRows = [...byId.values()];
-  console.log(`[data] Funds in source list: ${uniqueRows.length}`);
-
-  const selectedRows = uniqueRows
-    .filter(shouldIncludeFund)
-    .map((row) => ({ ...row, universe_source: "main" }));
-  console.log(`[data] Selected open/exchange + formed: ${selectedRows.length}`);
-
-  const rankingIds = await fetchRankingFundIds();
-  const selectedById = new Map(selectedRows.map((row) => [String(row.id), row]));
-  let rankingAdded = 0;
-  for (const id of rankingIds) {
-    const key = String(id);
-    if (selectedById.has(key)) continue;
-    selectedById.set(key, {
-      id,
-      name: null,
-      detail_path: `/funds/${id}/`,
-      fund_type_raw: null,
-      management_company: null,
-      status_raw: "сформирован",
-      category_raw: null,
-      investment_object_raw: null,
-      specialization_raw: null,
-      nav_date_raw: null,
-      aum_mln_raw: null,
-      fund_type: "открытый",
-      status: "сформирован",
-      investment_type: "Смешанный",
-      specialization: null,
-      universe_source: "ranking-extra",
-      nav_date: null,
-      aum_mln: null,
-    });
-    rankingAdded += 1;
-  }
-  const candidateRows = [...selectedById.values()];
-  console.log(`[data] Added from ranking scan: ${rankingAdded}`);
-  console.log(`[data] Total candidates for details: ${candidateRows.length}`);
-
-  const previousFunds =
-    state.dataset && Array.isArray(state.dataset.funds) ? state.dataset.funds : [];
-  const previousHistoriesById =
-    state.dataset && state.dataset.historiesById ? state.dataset.historiesById : {};
-  const previousById = new Map(previousFunds.map((f) => [f.id, f]));
-  let detailFetchedCount = 0;
-  let detailReusedCount = 0;
-
-  const detailed = await mapLimit(
-    candidateRows,
-    DETAIL_CONCURRENCY,
-    async (row, i) => {
-      const previous = previousById.get(row.id);
-      if (previous && (previous.ticker || previous.fund_id || previous.isin)) {
-        detailReusedCount += 1;
-        return {
-          ...buildFallbackFundMeta(row),
-          ticker: previous.ticker || null,
-          fund_id: previous.fund_id || null,
-          name: row.name || previous.name || null,
-          isin: previous.isin || null,
-          management_company:
-            row.management_company || previous.management_company || null,
-          specialization:
-            row.specialization || previous.specialization || row.category_raw || null,
-        };
-      }
-
-      let meta = null;
-      try {
-        meta = await fetchFundDetails(row);
-        detailFetchedCount += 1;
-      } catch (error) {
-        console.warn(
-          `[data] Fund card parse failed for ${row.id}: ${String(
-            error.message || error
-          )}`
-        );
-        meta = buildFallbackFundMeta(row);
-      }
-      if ((i + 1) % 25 === 0 || i + 1 === candidateRows.length) {
-        console.log(`[data] Parsed fund card ${i + 1}/${candidateRows.length}`);
-      }
-      return meta;
-    }
-  );
-
-  const funds = detailed.filter(Boolean);
-  console.log(`[data] Detailed funds: ${funds.length}`);
-  console.log(
-    `[data] Fund cards fetched: ${detailFetchedCount}, reused from cache: ${detailReusedCount}`
-  );
-
-  const historiesById = {};
-  const fundById = new Map(funds.map((fund) => [fund.id, fund]));
-  const fundIdsWithHistory = [];
-  const fundIdsWithoutHistory = [];
-  for (const fund of funds) {
-    const prevHistory = previousHistoriesById[String(fund.id)] || [];
-    if (prevHistory.length) {
-      fundIdsWithHistory.push(fund.id);
-    } else {
-      fundIdsWithoutHistory.push(fund.id);
-    }
-  }
-  const batches = [
-    ...chunkArray(fundIdsWithHistory, HISTORY_BATCH_SIZE),
-    ...chunkArray(fundIdsWithoutHistory, HISTORY_BATCH_SIZE),
-  ];
-  console.log(
-    `[data] History mode: incremental=${fundIdsWithHistory.length}, full=${fundIdsWithoutHistory.length}`
-  );
-  let loadedFunds = 0;
-
-  await mapLimit(
-    batches,
-    HISTORY_BATCH_CONCURRENCY,
-    async (batchFundIds, batchIndex) => {
-      const dateFrom = batchDateFrom(batchFundIds, previousHistoriesById);
-      const [payById, scaById] = await Promise.all([
-        fetchFundSeriesBatch(batchFundIds, "pay", { dateFrom }),
-        fetchFundSeriesBatch(batchFundIds, "sca", { dateFrom }),
-      ]);
-
-      for (const fundId of batchFundIds) {
-        const paySeries = payById[String(fundId)] || [];
-        const scaSeries = scaById[String(fundId)] || [];
-        const previousHistory = previousHistoriesById[String(fundId)] || [];
-        const history = mergeHistoryIncremental(previousHistory, paySeries, scaSeries);
-        historiesById[String(fundId)] = history;
-
-        const fund = fundById.get(fundId);
-        if (!fund) continue;
-
-        const last = findLastWithNav(history);
-        const lastAumPoint = [...history].reverse().find((p) => p.aum != null) || null;
-        fund.latest_nav = last ? last.nav : null;
-        fund.latest_aum = lastAumPoint ? lastAumPoint.aum : null;
-        fund.latest_date = (last || lastAumPoint || {}).time || null;
-      }
-
-      loadedFunds += batchFundIds.length;
-      console.log(
-        `[data] Loaded history batch ${batchIndex + 1}/${batches.length} (${Math.min(
-          loadedFunds,
-          funds.length
-        )}/${funds.length})`
-      );
-    }
-  );
-
-  const returns = funds.map((fund) =>
-    buildReturnsRow(fund, historiesById[String(fund.id)] || [])
-  );
-
-  const dataset = {
-    version: DATASET_VERSION,
-    source: BASE_URL,
-    generatedAt: new Date().toISOString(),
-    funds,
-    returns,
-    historiesById,
+    const snapshot = {
+      startedAt: runStats.startedAt,
+      completedAt: new Date().toISOString(),
+      durationSec,
+      stage: runStats.stage,
+      listPages: runStats.listPages,
+      listPagesParsed: runStats.listPagesParsed,
+      sourceFunds: runStats.sourceFunds,
+      selectedFunds: runStats.selectedFunds,
+      rankingAdded: runStats.rankingAdded,
+      candidates: runStats.candidates,
+      detailsTotal: runStats.detailsTotal,
+      detailsProcessed: runStats.detailsProcessed,
+      detailFetchedCount: runStats.detailFetchedCount,
+      detailReusedCount: runStats.detailReusedCount,
+      detailFailedCount: runStats.detailFailedCount,
+      historyBatchesTotal: runStats.historyBatchesTotal,
+      historyBatchesDone: runStats.historyBatchesDone,
+      historyBatchFailed: runStats.historyBatchFailed,
+      historyFundsTotal: runStats.historyFundsTotal,
+      historyFundsDone: runStats.historyFundsDone,
+    };
+    state.marketLastRun = snapshot;
+    return snapshot;
   };
 
-  await fs.mkdir(path.dirname(CACHE_FILE), { recursive: true });
-  await fs.writeFile(CACHE_FILE, JSON.stringify(dataset), "utf8");
+  console.log("[data] Build started...");
+  try {
+    const firstHtml = await fetchText(`${BASE_URL}/funds/?showID=54&limit=50&page=1`);
+    const firstParsed = parseListPage(firstHtml);
+    runStats.listPagesParsed = 1;
+    const maxPage = Math.min(firstParsed.maxPage || 1, MAX_LIST_PAGES);
+    runStats.listPages = maxPage;
+    runStats.stage = "list-pages";
+    console.log(`[data] List pages: ${maxPage}`);
 
-  const sec = ((Date.now() - startedAt) / 1000).toFixed(1);
-  console.log(`[data] Build finished in ${sec}s. Cache: ${CACHE_FILE}`);
-  return dataset;
+    const rawRows = [...firstParsed.rows];
+    const pages = Array.from({ length: Math.max(0, maxPage - 1) }, (_, i) => i + 2);
+    if (pages.length) {
+      const pageRows = await mapLimit(
+        pages,
+        LIST_CONCURRENCY,
+        async (page, i) => {
+          const html = await fetchText(
+            `${BASE_URL}/funds/?showID=54&limit=50&page=${page}`
+          );
+          const parsed = parseListPage(html);
+          runStats.listPagesParsed += 1;
+          if ((i + 1) % 10 === 0 || i + 1 === pages.length) {
+            console.log(`[data] Parsed list page ${page}/${maxPage}`);
+          }
+          return parsed.rows;
+        }
+      );
+      for (const rows of pageRows) {
+        if (Array.isArray(rows)) rawRows.push(...rows);
+      }
+    }
+
+    const byId = new Map();
+    for (const row of rawRows) {
+      if (!row.id) continue;
+      if (!byId.has(row.id)) byId.set(row.id, row);
+    }
+    const uniqueRows = [...byId.values()];
+    runStats.sourceFunds = uniqueRows.length;
+    console.log(`[data] Funds in source list: ${uniqueRows.length}`);
+
+    const selectedRows = uniqueRows
+      .filter(shouldIncludeFund)
+      .map((row) => ({ ...row, universe_source: "main" }));
+    runStats.selectedFunds = selectedRows.length;
+    console.log(`[data] Selected open/exchange + formed: ${selectedRows.length}`);
+
+    const rankingIds = await fetchRankingFundIds();
+    const selectedById = new Map(selectedRows.map((row) => [String(row.id), row]));
+    let rankingAdded = 0;
+    for (const id of rankingIds) {
+      const key = String(id);
+      if (selectedById.has(key)) continue;
+      selectedById.set(key, {
+        id,
+        name: null,
+        detail_path: `/funds/${id}/`,
+        fund_type_raw: null,
+        management_company: null,
+        status_raw: "сформирован",
+        category_raw: null,
+        investment_object_raw: null,
+        specialization_raw: null,
+        nav_date_raw: null,
+        aum_mln_raw: null,
+        fund_type: "открытый",
+        status: "сформирован",
+        investment_type: "Смешанный",
+        specialization: null,
+        universe_source: "ranking-extra",
+        nav_date: null,
+        aum_mln: null,
+      });
+      rankingAdded += 1;
+    }
+    runStats.rankingAdded = rankingAdded;
+    const candidateRows = [...selectedById.values()];
+    runStats.candidates = candidateRows.length;
+    runStats.detailsTotal = candidateRows.length;
+    runStats.stage = "details";
+    console.log(`[data] Added from ranking scan: ${rankingAdded}`);
+    console.log(`[data] Total candidates for details: ${candidateRows.length}`);
+
+    const previousFunds =
+      state.dataset && Array.isArray(state.dataset.funds) ? state.dataset.funds : [];
+    const previousHistoriesById =
+      state.dataset && state.dataset.historiesById ? state.dataset.historiesById : {};
+    const previousById = new Map(previousFunds.map((f) => [f.id, f]));
+
+    const detailed = await mapLimit(
+      candidateRows,
+      DETAIL_CONCURRENCY,
+      async (row, i) => {
+        try {
+          const previous = previousById.get(row.id);
+          if (previous && (previous.ticker || previous.fund_id || previous.isin)) {
+            runStats.detailReusedCount += 1;
+            return {
+              ...buildFallbackFundMeta(row),
+              ticker: previous.ticker || null,
+              fund_id: previous.fund_id || null,
+              name: row.name || previous.name || null,
+              isin: previous.isin || null,
+              management_company:
+                row.management_company || previous.management_company || null,
+              specialization:
+                row.specialization || previous.specialization || row.category_raw || null,
+            };
+          }
+
+          let meta = null;
+          try {
+            meta = await fetchFundDetails(row);
+            runStats.detailFetchedCount += 1;
+          } catch (error) {
+            runStats.detailFailedCount += 1;
+            console.warn(
+              `[data] Fund card parse failed for ${row.id}: ${String(
+                error.message || error
+              )}`
+            );
+            meta = buildFallbackFundMeta(row);
+          }
+          if ((i + 1) % 25 === 0 || i + 1 === candidateRows.length) {
+            console.log(`[data] Parsed fund card ${i + 1}/${candidateRows.length}`);
+          }
+          return meta;
+        } finally {
+          runStats.detailsProcessed += 1;
+        }
+      }
+    );
+
+    const funds = detailed.filter(Boolean);
+    runStats.detailsTotal = funds.length;
+    console.log(`[data] Detailed funds: ${funds.length}`);
+    console.log(
+      `[data] Fund cards fetched: ${runStats.detailFetchedCount}, reused from cache: ${runStats.detailReusedCount}, failed: ${runStats.detailFailedCount}`
+    );
+
+    const historiesById = {};
+    const fundById = new Map(funds.map((fund) => [fund.id, fund]));
+    const fundIdsWithHistory = [];
+    const fundIdsWithoutHistory = [];
+    for (const fund of funds) {
+      const prevHistory = previousHistoriesById[String(fund.id)] || [];
+      if (prevHistory.length) {
+        fundIdsWithHistory.push(fund.id);
+      } else {
+        fundIdsWithoutHistory.push(fund.id);
+      }
+    }
+    const batches = [
+      ...chunkArray(fundIdsWithHistory, HISTORY_BATCH_SIZE),
+      ...chunkArray(fundIdsWithoutHistory, HISTORY_BATCH_SIZE),
+    ];
+    runStats.stage = "histories";
+    runStats.historyBatchesTotal = batches.length;
+    runStats.historyFundsTotal = funds.length;
+    console.log(
+      `[data] History mode: incremental=${fundIdsWithHistory.length}, full=${fundIdsWithoutHistory.length}`
+    );
+    let loadedFunds = 0;
+
+    await mapLimit(
+      batches,
+      HISTORY_BATCH_CONCURRENCY,
+      async (batchFundIds, batchIndex) => {
+        try {
+          const dateFrom = batchDateFrom(batchFundIds, previousHistoriesById);
+          const [payById, scaById] = await Promise.all([
+            fetchFundSeriesBatch(batchFundIds, "pay", { dateFrom }),
+            fetchFundSeriesBatch(batchFundIds, "sca", { dateFrom }),
+          ]);
+
+          for (const fundId of batchFundIds) {
+            const paySeries = payById[String(fundId)] || [];
+            const scaSeries = scaById[String(fundId)] || [];
+            const previousHistory = previousHistoriesById[String(fundId)] || [];
+            const history = mergeHistoryIncremental(previousHistory, paySeries, scaSeries);
+            historiesById[String(fundId)] = history;
+
+            const fund = fundById.get(fundId);
+            if (!fund) continue;
+
+            const last = findLastWithNav(history);
+            const lastAumPoint = [...history].reverse().find((p) => p.aum != null) || null;
+            fund.latest_nav = last ? last.nav : null;
+            fund.latest_aum = lastAumPoint ? lastAumPoint.aum : null;
+            fund.latest_date = (last || lastAumPoint || {}).time || null;
+          }
+        } catch (error) {
+          runStats.historyBatchFailed += 1;
+          console.warn(
+            `[data] History batch failed (${batchIndex + 1}/${batches.length}): ${String(
+              error.message || error
+            )}`
+          );
+          // Keep previous history for this batch to avoid full-build failure.
+          for (const fundId of batchFundIds) {
+            const previousHistory = previousHistoriesById[String(fundId)] || [];
+            historiesById[String(fundId)] = previousHistory;
+            const fund = fundById.get(fundId);
+            if (!fund) continue;
+            const last = findLastWithNav(previousHistory);
+            const lastAumPoint =
+              [...previousHistory].reverse().find((p) => p.aum != null) || null;
+            fund.latest_nav = last ? last.nav : null;
+            fund.latest_aum = lastAumPoint ? lastAumPoint.aum : null;
+            fund.latest_date = (last || lastAumPoint || {}).time || null;
+          }
+        } finally {
+          runStats.historyBatchesDone += 1;
+          runStats.historyFundsDone += batchFundIds.length;
+          loadedFunds += batchFundIds.length;
+          console.log(
+            `[data] Loaded history batch ${batchIndex + 1}/${batches.length} (${Math.min(
+              loadedFunds,
+              funds.length
+            )}/${funds.length})`
+          );
+        }
+      },
+      { continueOnError: true }
+    );
+
+    runStats.stage = "returns";
+    const returns = funds.map((fund) =>
+      buildReturnsRow(fund, historiesById[String(fund.id)] || [])
+    );
+
+    const runSnapshot = finalizeRun();
+    const dataset = {
+      version: DATASET_VERSION,
+      source: BASE_URL,
+      generatedAt: new Date().toISOString(),
+      funds,
+      returns,
+      historiesById,
+      buildStats: runSnapshot,
+    };
+
+    await fs.mkdir(path.dirname(CACHE_FILE), { recursive: true });
+    await fs.writeFile(CACHE_FILE, JSON.stringify(dataset), "utf8");
+
+    const sec = ((Date.now() - startedAt) / 1000).toFixed(1);
+    console.log(
+      `[data] Build finished in ${sec}s. Funds=${funds.length}. Detail failed=${runStats.detailFailedCount}. History failed batches=${runStats.historyBatchFailed}. Cache: ${CACHE_FILE}`
+    );
+    return dataset;
+  } catch (error) {
+    state.marketLastError = String(error.message || error);
+    throw error;
+  } finally {
+    if (state.marketBuildState === runStats) {
+      state.marketBuildState = null;
+    }
+  }
 }
 
 function isValidMainDataset(data) {
@@ -2075,6 +2218,16 @@ async function getStatusSummary() {
 
   const mainGeneratedAt = mainDs && mainDs.generatedAt ? mainDs.generatedAt : null;
   const mainAgeDays = ageDaysFromTimestamp(mainGeneratedAt);
+  const marketBuildState =
+    state.marketBuildState && typeof state.marketBuildState === "object"
+      ? state.marketBuildState
+      : null;
+  const marketLastRun =
+    state.marketLastRun && typeof state.marketLastRun === "object"
+      ? state.marketLastRun
+      : mainDs && mainDs.buildStats && typeof mainDs.buildStats === "object"
+        ? mainDs.buildStats
+        : null;
 
   return {
     ok: true,
@@ -2087,6 +2240,36 @@ async function getStatusSummary() {
     refreshing: {
       market: Boolean(state.buildPromise),
       compositions: Boolean(state.compositionsBuildPromise),
+    },
+    market: {
+      generatedAt: mainGeneratedAt,
+      generatedAgeDays: mainAgeDays,
+      refreshing: Boolean(state.buildPromise),
+      progress: marketBuildState
+        ? {
+            stage: marketBuildState.stage || null,
+            detailsTotal: Number(marketBuildState.detailsTotal) || 0,
+            detailsProcessed: Number(marketBuildState.detailsProcessed) || 0,
+            detailFailedCount: Number(marketBuildState.detailFailedCount) || 0,
+            historyBatchesTotal: Number(marketBuildState.historyBatchesTotal) || 0,
+            historyBatchesDone: Number(marketBuildState.historyBatchesDone) || 0,
+            historyBatchFailed: Number(marketBuildState.historyBatchFailed) || 0,
+            historyFundsTotal: Number(marketBuildState.historyFundsTotal) || 0,
+            historyFundsDone: Number(marketBuildState.historyFundsDone) || 0,
+          }
+        : null,
+      failedFunds: marketBuildState
+        ? Number(marketBuildState.detailFailedCount) || 0
+        : marketLastRun
+          ? Number(marketLastRun.detailFailedCount) || 0
+          : 0,
+      failedHistoryBatches: marketBuildState
+        ? Number(marketBuildState.historyBatchFailed) || 0
+        : marketLastRun
+          ? Number(marketLastRun.historyBatchFailed) || 0
+          : 0,
+      lastError: state.marketLastError || null,
+      lastRun: marketLastRun || null,
     },
     compositions: buildCompositionsMeta(compDs),
   };

@@ -1291,6 +1291,9 @@ function updateGlobalStatusPill(statusPayload) {
   const el = document.getElementById('globalUpdateStatus');
   if (!el) return;
 
+  const market = statusPayload && statusPayload.market
+    ? statusPayload.market
+    : null;
   const compositions = statusPayload && statusPayload.compositions
     ? statusPayload.compositions
     : (compositionMeta || null);
@@ -1301,8 +1304,25 @@ function updateGlobalStatusPill(statusPayload) {
   );
   const staleCountRaw = compositions && compositions.staleCount;
   const staleCount = Number.isFinite(Number(staleCountRaw)) ? Number(staleCountRaw) : null;
-  const updatedAt = (compositions && compositions.generatedAt) ||
-    (statusPayload && statusPayload.generatedAt) || null;
+  const pickLatestTimestamp = (...values) => {
+    let best = null;
+    let bestTs = -1;
+    for (const value of values) {
+      const ts = Date.parse(String(value || ''));
+      if (!Number.isFinite(ts)) continue;
+      if (ts > bestTs) {
+        bestTs = ts;
+        best = value;
+      }
+    }
+    return best;
+  };
+  const updatedAt = pickLatestTimestamp(
+    compositions && compositions.generatedAt,
+    market && market.generatedAt,
+    statusPayload && statusPayload.generatedAt
+  );
+
   const progress = (compositions && compositions.progress && typeof compositions.progress === 'object')
     ? compositions.progress
     : null;
@@ -1310,13 +1330,51 @@ function updateGlobalStatusPill(statusPayload) {
   const progressDoneRaw = progress && progress.processed;
   const progressTotal = Number.isFinite(Number(progressTotalRaw)) ? Number(progressTotalRaw) : null;
   const progressDone = Number.isFinite(Number(progressDoneRaw)) ? Number(progressDoneRaw) : null;
+  const marketProgress = (market && market.progress && typeof market.progress === 'object')
+    ? market.progress
+    : null;
+  const marketDetailsTotalRaw = marketProgress && marketProgress.detailsTotal;
+  const marketDetailsDoneRaw = marketProgress && marketProgress.detailsProcessed;
+  const marketDetailsTotal = Number.isFinite(Number(marketDetailsTotalRaw))
+    ? Number(marketDetailsTotalRaw)
+    : null;
+  const marketDetailsDone = Number.isFinite(Number(marketDetailsDoneRaw))
+    ? Number(marketDetailsDoneRaw)
+    : null;
+  const marketHistoryTotalRaw = marketProgress && marketProgress.historyBatchesTotal;
+  const marketHistoryDoneRaw = marketProgress && marketProgress.historyBatchesDone;
+  const marketHistoryTotal = Number.isFinite(Number(marketHistoryTotalRaw))
+    ? Number(marketHistoryTotalRaw)
+    : null;
+  const marketHistoryDone = Number.isFinite(Number(marketHistoryDoneRaw))
+    ? Number(marketHistoryDoneRaw)
+    : null;
+
   const failedFundsRaw = (progress && progress.failedCount != null)
     ? progress.failedCount
     : (compositions && compositions.failedFunds);
   const failedFunds = Number.isFinite(Number(failedFundsRaw)) ? Number(failedFundsRaw) : 0;
+  const marketFailedFundsRaw = market && market.failedFunds;
+  const marketFailedFunds = Number.isFinite(Number(marketFailedFundsRaw))
+    ? Number(marketFailedFundsRaw)
+    : 0;
+  const marketFailedBatchesRaw = market && market.failedHistoryBatches;
+  const marketFailedBatches = Number.isFinite(Number(marketFailedBatchesRaw))
+    ? Number(marketFailedBatchesRaw)
+    : 0;
   const lastError = (compositions && compositions.lastError)
     ? String(compositions.lastError)
     : '';
+  const marketLastError = (market && market.lastError)
+    ? String(market.lastError)
+    : '';
+  const marketRefreshing = Boolean(
+    statusPayload && statusPayload.refreshing && statusPayload.refreshing.market
+  );
+  const compositionRefreshing = Boolean(
+    (statusPayload && statusPayload.refreshing && statusPayload.refreshing.compositions) ||
+    (compositions && compositions.refreshing)
+  );
 
   const refreshing = Boolean(
     (statusPayload && statusPayload.refreshing &&
@@ -1326,16 +1384,30 @@ function updateGlobalStatusPill(statusPayload) {
 
   let text = `Обновлено: ${updatedAt ? formatDateTimeRu(updatedAt) : '--'}`;
   if (staleCount != null) text += ` · ${staleMarkDays}+д: ${staleCount}`;
-  if (
-    refreshing &&
-    progressTotal != null &&
-    progressDone != null &&
-    progressTotal > 0
-  ) {
-    text += ` · ${Math.min(progressDone, progressTotal)}/${progressTotal}`;
+  const progressParts = [];
+  if (marketRefreshing) {
+    if (marketDetailsTotal != null && marketDetailsDone != null && marketDetailsTotal > 0) {
+      progressParts.push(`рынок ${Math.min(marketDetailsDone, marketDetailsTotal)}/${marketDetailsTotal}`);
+    } else if (marketHistoryTotal != null && marketHistoryDone != null && marketHistoryTotal > 0) {
+      progressParts.push(`история ${Math.min(marketHistoryDone, marketHistoryTotal)}/${marketHistoryTotal}`);
+    } else {
+      progressParts.push('рынок');
+    }
   }
+  if (compositionRefreshing) {
+    if (progressTotal != null && progressDone != null && progressTotal > 0) {
+      progressParts.push(`состав ${Math.min(progressDone, progressTotal)}/${progressTotal}`);
+    } else {
+      progressParts.push('состав');
+    }
+  }
+  if (progressParts.length) text += ` · ${progressParts.join(' · ')}`;
+
+  if (marketFailedFunds > 0) text += ` · рынок ошибок фондов: ${marketFailedFunds}`;
+  if (marketFailedBatches > 0) text += ` · рынок батч-ошибок: ${marketFailedBatches}`;
   if (failedFunds > 0) text += ` · ошибок фондов: ${failedFunds}`;
-  if (lastError) text += ' · ошибка обновления';
+  if (marketLastError) text += ' · ошибка обновления рынка';
+  if (lastError) text += ' · ошибка обновления состава';
   if (refreshing) text += ' · обновляем';
 
   el.textContent = text;
