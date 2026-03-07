@@ -437,6 +437,9 @@ body {
   font-weight: 500;
 }
 .summary-link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   border: none;
   background: transparent;
   color: var(--accent);
@@ -444,9 +447,18 @@ body {
   padding: 0;
   font: inherit;
   text-align: left;
+  line-height: 1.25;
+  border-bottom: 1px dashed rgba(90, 182, 240, 0.45);
 }
 .summary-link-btn:hover {
   text-decoration: underline;
+}
+.summary-link-btn::after {
+  content: '↗';
+  font-size: 10px;
+  color: #7fd0ff;
+  opacity: 0.85;
+  transform: translateY(-1px);
 }
 .summary-tbl tr:last-child td { font-weight: 700; }
 .summary-tbl .pos { color: var(--green); }
@@ -1130,6 +1142,7 @@ let fundPeriod = '1Y';
 let fundFreq = 'day';
 let fundPctMode = false;
 let returnsByFundId = new Map();
+let fundsById = new Map();
 let fundsByNameKey = new Map();
 let fundsByMcKey = new Map();
 const NON_FUND_GROUP_LABELS = new Set([
@@ -1167,8 +1180,6 @@ const FUND_COLORS = { nav: '#5ab6f0', aum: '#b267f6', shares: '#f6b23a' };
 const TYPE_ORDER = ['Акции','Смешанный','Облигации','Драгметаллы','Денежный'];
 const COMPOSITION_TARGETS_RAW = [
   { query: 'Аленка Капитал' },
-  { query: 'Альфа-Капитал Валютные облигации' },
-  { query: 'Альфа-Капитал Облигации Плюс' },
   { query: 'Альфа-Капитал Ликвидные акции' },
   { query: 'Альфа-Капитал Высокодоходные облигации' },
   { query: 'Альфа-Капитал Акции компаний роста' },
@@ -1178,40 +1189,23 @@ const COMPOSITION_TARGETS_RAW = [
   { query: 'Блэк Лайн', note: 'Назар Щетинин' },
   { query: 'Великолепная семерка', note: 'Крейнин Иван Вадимович' },
   { query: 'Долгосрочные инвестиции', fundId: '7593', note: 'Воробьев Илья Витальевич' },
-  { query: 'Альфа-Капитал Облигации с переменным купоном' },
   { query: 'Альфа-Капитал Управляемые акции' },
-  { query: 'Альфа-Капитал Управляемые облигации' },
-  { query: 'Альфа-Капитал Управляемые валютные облигации' },
   { query: 'Альфа-Капитал ИТ Лидеры' },
   { query: 'Атон - Петр Столыпин' },
   { query: 'Атон – Эшелон 2.0' },
-  { query: 'Атон - Фонд Еврооблигаций' },
-  { query: 'Атон - Фонд облигаций' },
-  { query: 'ВИМ - Облигации. Рантье' },
   { query: 'ВИМ - Облигации. Российские эмитенты' },
   { query: 'ВИМ – Акции. Российские эмитенты' },
-  { query: 'Российские облигации', mc: 'ВИМ' },
-  { query: 'ДОХОДЪ. Перспективные облигации. Россия' },
-  { query: 'ДОХОДЪ. Дивидендные акции. Россия' },
-  { query: 'ДОХОДЪ. Российские акции. Первый эшелон' },
-  { query: 'ДОХОДЪ. Мультифакторные инвестиции. Россия' },
   { query: 'ДОХОДЪ Индекс дивидендных акций' },
   { query: 'ДОХОДЪ Сбондс Корпоративные облигации РФ' },
   { query: 'ДОХОДЪ Индекс акций роста' },
   { query: 'Маркет Пауэр - Акции' },
-  { query: 'Первая - Фонд Корпоративные облигации' },
   { query: 'Первая - Фонд Халяльные инвестиции' },
-  { query: 'Т-Капитал Локальные валютные облигации' },
-  { query: 'Т-Капитал Облигации' },
   { query: 'Т-Капитал Трендовые акции' },
   { query: 'Рублевые перспективы' },
   { query: 'Флагманский' },
-  { query: 'Валютные возможности' },
   { query: 'Истории роста' },
-  { query: 'РСХБ - Фонд Облигаций' },
   { query: 'РСХБ - Фонд Акций' },
   { query: 'Т-Капитал Компании второго эшелона' },
-  { query: 'Т-Капитал Пассивный Доход' },
   { query: 'Т-Капитал Дивидендные акции' },
 ];
 const COMPOSITION_TARGETS = dedupeCompositionTargets(COMPOSITION_TARGETS_RAW);
@@ -1235,9 +1229,15 @@ async function init() {
 }
 
 async function loadFundsList() {
-  const res = await fetch('/api/funds');
-  allFunds = await res.json();
-  rebuildFundLookupIndexes();
+  try {
+    const payload = await fetchJsonChecked('/api/funds', 'Не удалось загрузить список фондов');
+    allFunds = Array.isArray(payload) ? payload : [];
+  } catch (error) {
+    console.warn(`[funds] ${String(error.message || error)}`);
+    allFunds = [];
+  } finally {
+    rebuildFundLookupIndexes();
+  }
 }
 
 // ============================================================
@@ -1319,6 +1319,27 @@ function updateGlobalStatusPill(statusPayload) {
   el.classList.toggle('stale', staleCount != null && staleCount > 0);
 }
 
+function getApiErrorMessage(payload, fallback = 'Ошибка запроса') {
+  if (payload && typeof payload === 'object' && payload.error) {
+    return String(payload.error);
+  }
+  return fallback;
+}
+
+async function fetchJsonChecked(url, fallbackError = 'Ошибка запроса') {
+  const res = await fetch(url);
+  let payload = null;
+  try {
+    payload = await res.json();
+  } catch {
+    throw new Error(fallbackError);
+  }
+  if (!res.ok) {
+    throw new Error(getApiErrorMessage(payload, fallbackError));
+  }
+  return payload;
+}
+
 // ============================================================
 // THEME
 // ============================================================
@@ -1382,16 +1403,30 @@ function initTab1Filters() {
 }
 
 async function loadReturnsData() {
-  const res = await fetch('/api/returns');
-  returnsData = await res.json();
-  returnsByFundId = new Map(
-    returnsData
-      .filter((row) => row && row.id != null)
-      .map((row) => [String(row.id), row])
-  );
-  initTab1Filters();
-  renderReturnsTable();
-  if (compositionLoaded) renderCompositionCards();
+  try {
+    const payload = await fetchJsonChecked('/api/returns', 'Не удалось загрузить доходности фондов');
+    returnsData = Array.isArray(payload) ? payload : [];
+    returnsByFundId = new Map(
+      returnsData
+        .filter((row) => row && row.id != null)
+        .map((row) => [String(row.id), row])
+    );
+    initTab1Filters();
+    renderReturnsTable();
+    if (compositionLoaded) renderCompositionCards();
+  } catch (error) {
+    console.warn(`[returns] ${String(error.message || error)}`);
+    returnsData = [];
+    returnsByFundId = new Map();
+    const tbody = document.querySelector('#returnsTable tbody');
+    if (tbody) {
+      tbody.innerHTML = `<tr><td colspan="12" style="text-align:center;color:var(--red);padding:16px;">${escapeHtml(
+        String(error.message || error)
+      )}</td></tr>`;
+    }
+    const totalEl = document.getElementById('returnsTotal');
+    if (totalEl) totalEl.textContent = 'Фонды: 0';
+  }
 }
 
 function renderReturnsTable() {
@@ -1485,10 +1520,13 @@ function initTab2Filters() {
 }
 
 async function loadMarketData() {
-  const ft = mktFundType.length === 2 ? 'all' : mktFundType.map(t => t === 'открытый' ? 'opif' : 'bpif').join(',');
-  const res = await fetch('/api/market?fund_type=' + ft);
-  marketData = await res.json();
-  renderMarketCharts();
+  try {
+    const ft = mktFundType.length === 2 ? 'all' : mktFundType.map(t => t === 'открытый' ? 'opif' : 'bpif').join(',');
+    marketData = await fetchJsonChecked('/api/market?fund_type=' + ft, 'Не удалось загрузить данные вкладки Рынок');
+    renderMarketCharts();
+  } catch (error) {
+    console.warn(`[market] ${String(error.message || error)}`);
+  }
 }
 
 function renderMarketCharts() {
@@ -1575,10 +1613,16 @@ async function loadMCDetailData() {
     renderMCCharts();
     return;
   }
-  const ft = mcFundType.length === 2 ? 'all' : mcFundType.map(t => t === 'открытый' ? 'opif' : 'bpif').join(',');
-  const res = await fetch(`/api/mc-detail?mc=${encodeURIComponent(mcSelectedMC)}&fund_type=${ft}`);
-  mcDetailData = await res.json();
-  renderMCCharts();
+  try {
+    const ft = mcFundType.length === 2 ? 'all' : mcFundType.map(t => t === 'открытый' ? 'opif' : 'bpif').join(',');
+    mcDetailData = await fetchJsonChecked(
+      `/api/mc-detail?mc=${encodeURIComponent(mcSelectedMC)}&fund_type=${ft}`,
+      'Не удалось загрузить данные вкладки УК'
+    );
+    renderMCCharts();
+  } catch (error) {
+    console.warn(`[mc-detail] ${String(error.message || error)}`);
+  }
 }
 
 function renderMCCharts() {
@@ -1665,14 +1709,21 @@ function selectFund(fund) {
 }
 
 async function loadFundData(fund) {
-  const { from, to } = getPeriodDates(fundPeriod);
-  updateFundInfoBar(fund, null);
-  const res = await fetch(`/api/nav/${fund.id}?from=${from}&to=${to}`);
-  const json = await res.json();
-  if (json.error) return;
-  fundRawData = json.data;
-  updateFundInfoBar(fund, fundRawData);
-  renderFundCharts(fundRawData);
+  try {
+    const { from, to } = getPeriodDates(fundPeriod);
+    updateFundInfoBar(fund, null);
+    const json = await fetchJsonChecked(
+      `/api/nav/${fund.id}?from=${from}&to=${to}`,
+      'Не удалось загрузить историю фонда'
+    );
+    fundRawData = Array.isArray(json && json.data) ? json.data : [];
+    updateFundInfoBar(fund, fundRawData);
+    renderFundCharts(fundRawData);
+  } catch (error) {
+    console.warn(`[fund-nav] ${String(error.message || error)}`);
+    fundRawData = [];
+    updateFundInfoBar(fund, null);
+  }
 }
 
 function updateFundInfoBar(fund, data) {
@@ -1874,10 +1925,13 @@ function initSummaryFundLinks() {
 }
 
 function rebuildFundLookupIndexes() {
+  const byId = new Map();
   const byName = new Map();
   const byMc = new Map();
   for (const fund of allFunds || []) {
     if (!fund) continue;
+    const idKey = String(fund.id || '').trim();
+    if (idKey) byId.set(idKey, fund);
     const nameKey = normalizeNameForMatch(fund.name);
     if (nameKey) {
       if (!byName.has(nameKey)) byName.set(nameKey, []);
@@ -1889,6 +1943,7 @@ function rebuildFundLookupIndexes() {
       byMc.get(mcKey).push(fund);
     }
   }
+  fundsById = byId;
   fundsByNameKey = byName;
   fundsByMcKey = byMc;
 }
@@ -1950,7 +2005,7 @@ async function openCompositionModalByFundId(fundId) {
   const modal = document.getElementById('compositionModal');
   const titleEl = document.getElementById('compositionModalTitle');
   const bodyEl = document.getElementById('compositionModalBody');
-  const fund = allFunds.find((f) => String(f.id) === key) || null;
+  const fund = fundsById.get(key) || null;
 
   titleEl.textContent = fund ? `Состав: ${fund.name}` : 'Состав фонда';
   bodyEl.innerHTML = '<div class="loading">Загружаем состав фонда...</div>';
@@ -2145,9 +2200,6 @@ function resolveSelectedCompositionRows(items) {
     _mcNorm: normalizeNameForMatch(item.management_company),
   }));
 
-  const fundMetaById = new Map(
-    (allFunds || []).map((fund) => [String(fund.id), fund])
-  );
   const selected = [];
   const missing = [];
   const usedIds = new Set();
@@ -2190,7 +2242,7 @@ function resolveSelectedCompositionRows(items) {
     for (const item of matches) {
       if (usedIds.has(item._id)) continue;
       usedIds.add(item._id);
-      const meta = fundMetaById.get(item._id);
+      const meta = fundsById.get(item._id);
       selected.push({
         ...item,
         _displayName: target.note ? `${item.name} (${target.note})` : item.name,
@@ -2216,8 +2268,10 @@ function renderCompositionCard(item) {
   const dateLabel = item.structure_date
     ? `Срез: ${escapeHtml(formatDateHuman(item.structure_date))}`
     : 'Дата среза не указана';
-  const typeLabel = item._fundType
-    ? `Тип: ${item._fundType === 'биржевой' ? 'БПИФ' : 'ОПИФ'}`
+  const fundMeta = fundsById.get(String(item && item.id)) || null;
+  const rawFundType = item && item._fundType ? item._fundType : (fundMeta && fundMeta.fund_type);
+  const typeLabel = rawFundType
+    ? `Тип: ${rawFundType === 'биржевой' ? 'БПИФ' : 'ОПИФ'}`
     : null;
   const aumLabel = aumValue != null ? `СЧА: ${escapeHtml(fmtAum(aumValue))}` : null;
   const metaParts = [

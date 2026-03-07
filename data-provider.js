@@ -61,9 +61,24 @@ const COMPOSITION_MISSING_RECHECK_DAYS = Number(
 const RANKING_SCAN_TTL_MS = Number(
   process.env.RANKING_SCAN_TTL_MS || (IS_RENDER ? 6 * 60 * 60 * 1000 : 60 * 60 * 1000)
 );
+const DAILY_MAIN_REFRESH_HOUR_MSK = Number(
+  process.env.DAILY_MAIN_REFRESH_HOUR_MSK ||
+    process.env.DAILY_REFRESH_HOUR_MSK ||
+    12
+);
+const DAILY_COMPOSITION_REFRESH_HOUR_MSK = Number(
+  process.env.DAILY_COMPOSITION_REFRESH_HOUR_MSK ||
+    process.env.DAILY_REFRESH_HOUR_MSK ||
+    12
+);
 
 const DATE_FMT_MSK = new Intl.DateTimeFormat("sv-SE", {
   timeZone: "Europe/Moscow",
+});
+const HOUR_FMT_MSK = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Europe/Moscow",
+  hour: "2-digit",
+  hour12: false,
 });
 
 const state = {
@@ -71,10 +86,12 @@ const state = {
   loadedAt: 0,
   diskLoaded: false,
   buildPromise: null,
+  datasetAutoRefreshDate: null,
   compositions: null,
   compositionsLoadedAt: 0,
   compositionsDiskLoaded: false,
   compositionsBuildPromise: null,
+  compositionsAutoRefreshDate: null,
   rankingIds: null,
   rankingIdsLoadedAt: 0,
 };
@@ -112,6 +129,24 @@ function ageDaysFromTimestamp(value, nowMs = Date.now()) {
   const ts = Date.parse(String(value || ""));
   if (!Number.isFinite(ts)) return null;
   return Math.max(0, Math.floor((nowMs - ts) / 86_400_000));
+}
+
+function mskDate(value = new Date()) {
+  return DATE_FMT_MSK.format(value);
+}
+
+function mskHour(value = new Date()) {
+  const raw = HOUR_FMT_MSK.format(value);
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isGeneratedAfterMskHour(isoTs, hourMsk) {
+  const ts = Date.parse(String(isoTs || ""));
+  if (!Number.isFinite(ts)) return false;
+  const d = new Date(ts);
+  const h = mskHour(d);
+  return h != null && h >= hourMsk;
 }
 
 async function readSeedJsonGz(filePath) {
@@ -1633,35 +1668,67 @@ async function ensureDiskLoaded() {
 async function getDataset() {
   await ensureDiskLoaded();
 
-  if (state.dataset) {
-    const isStale = Date.now() - state.loadedAt > CACHE_TTL_MS;
-    if (isStale && !state.buildPromise) {
-      state.buildPromise = buildDataset()
-        .then((data) => {
-          state.dataset = data;
-          state.loadedAt = datasetTimestampMs(data);
-          return data;
-        })
-        .finally(() => {
-          state.buildPromise = null;
-        });
-    }
-    return state.dataset;
-  }
-
-  if (!state.buildPromise) {
+  const startDatasetBuild = ({ resetDailyMarkOnFail = null } = {}) => {
+    if (state.buildPromise) return state.buildPromise;
     state.buildPromise = buildDataset()
       .then((data) => {
         state.dataset = data;
         state.loadedAt = datasetTimestampMs(data);
         return data;
       })
+      .catch((error) => {
+        if (
+          resetDailyMarkOnFail &&
+          state.datasetAutoRefreshDate === resetDailyMarkOnFail
+        ) {
+          state.datasetAutoRefreshDate = null;
+        }
+        throw error;
+      })
       .finally(() => {
         state.buildPromise = null;
       });
+    return state.buildPromise;
+  };
+
+  const maybeRunDailyNoonRefresh = () => {
+    if (DAILY_MAIN_REFRESH_HOUR_MSK < 0) return;
+    if (!state.dataset) return;
+    const todayMsk = mskDate();
+    const nowHourMsk = mskHour();
+    if (nowHourMsk == null || nowHourMsk < DAILY_MAIN_REFRESH_HOUR_MSK) return;
+    if (state.datasetAutoRefreshDate === todayMsk) return;
+
+    const generatedTodayMsk =
+      state.dataset.generatedAt &&
+      mskDate(new Date(state.dataset.generatedAt)) === todayMsk;
+    if (
+      generatedTodayMsk &&
+      isGeneratedAfterMskHour(state.dataset.generatedAt, DAILY_MAIN_REFRESH_HOUR_MSK)
+    ) {
+      state.datasetAutoRefreshDate = todayMsk;
+      return;
+    }
+
+    state.datasetAutoRefreshDate = todayMsk;
+    startDatasetBuild({ resetDailyMarkOnFail: todayMsk }).catch((error) => {
+      console.warn(
+        `[data] Daily auto-refresh failed: ${String(error.message || error)}`
+      );
+    });
+    console.log(
+      `[data] Daily auto-refresh started (MSK ${DAILY_MAIN_REFRESH_HOUR_MSK}:00)`
+    );
+  };
+
+  if (state.dataset) {
+    const isStale = Date.now() - state.loadedAt > CACHE_TTL_MS;
+    if (isStale) startDatasetBuild();
+    maybeRunDailyNoonRefresh();
+    return state.dataset;
   }
 
-  return state.buildPromise;
+  return startDatasetBuild();
 }
 
 function isValidCompositionDataset(data) {
@@ -1705,13 +1772,25 @@ async function ensureCompositionDiskLoaded() {
 async function getCompositionsDataset({ forceRefresh = false } = {}) {
   await ensureCompositionDiskLoaded();
 
-  const startCompositionsBuild = ({ force = false } = {}) => {
+  const startCompositionsBuild = ({
+    force = false,
+    resetDailyMarkOnFail = null,
+  } = {}) => {
     if (state.compositionsBuildPromise) return state.compositionsBuildPromise;
     state.compositionsBuildPromise = buildCompositionsDataset({ forceRefresh: force })
       .then((data) => {
         state.compositions = data;
         state.compositionsLoadedAt = datasetTimestampMs(data);
         return data;
+      })
+      .catch((error) => {
+        if (
+          resetDailyMarkOnFail &&
+          state.compositionsAutoRefreshDate === resetDailyMarkOnFail
+        ) {
+          state.compositionsAutoRefreshDate = null;
+        }
+        throw error;
       })
       .finally(() => {
         state.compositionsBuildPromise = null;
@@ -1729,9 +1808,46 @@ async function getCompositionsDataset({ forceRefresh = false } = {}) {
     return startCompositionsBuild({ force: true });
   }
 
+  const maybeRunDailyNoonRefresh = () => {
+    if (DAILY_COMPOSITION_REFRESH_HOUR_MSK < 0) return;
+    if (!state.compositions) return;
+    const todayMsk = mskDate();
+    const nowHourMsk = mskHour();
+    if (nowHourMsk == null || nowHourMsk < DAILY_COMPOSITION_REFRESH_HOUR_MSK) return;
+    if (state.compositionsAutoRefreshDate === todayMsk) return;
+
+    const generatedTodayMsk =
+      state.compositions.generatedAt &&
+      mskDate(new Date(state.compositions.generatedAt)) === todayMsk;
+    if (
+      generatedTodayMsk &&
+      isGeneratedAfterMskHour(
+        state.compositions.generatedAt,
+        DAILY_COMPOSITION_REFRESH_HOUR_MSK
+      )
+    ) {
+      state.compositionsAutoRefreshDate = todayMsk;
+      return;
+    }
+
+    state.compositionsAutoRefreshDate = todayMsk;
+    startCompositionsBuild({
+      force: true,
+      resetDailyMarkOnFail: todayMsk,
+    }).catch((error) => {
+      console.warn(
+        `[composition] Daily auto-refresh failed: ${String(error.message || error)}`
+      );
+    });
+    console.log(
+      `[composition] Daily auto-refresh started (MSK ${DAILY_COMPOSITION_REFRESH_HOUR_MSK}:00)`
+    );
+  };
+
   if (state.compositions) {
     const isStale = Date.now() - state.compositionsLoadedAt > COMPOSITION_CACHE_TTL_MS;
     if (isStale) startCompositionsBuild();
+    maybeRunDailyNoonRefresh();
     return state.compositions;
   }
 
@@ -1814,10 +1930,10 @@ async function getCompositionsPayload({ forceRefresh = false } = {}) {
 }
 
 async function getStatusSummary() {
-  await Promise.all([ensureDiskLoaded(), ensureCompositionDiskLoaded()]);
-  const mainDs = state.dataset || (await getDataset());
-  const compDs =
-    state.compositions || (await getCompositionsDataset({ forceRefresh: false }));
+  const [mainDs, compDs] = await Promise.all([
+    getDataset(),
+    getCompositionsDataset({ forceRefresh: false }),
+  ]);
 
   const mainGeneratedAt = mainDs && mainDs.generatedAt ? mainDs.generatedAt : null;
   const mainAgeDays = ageDaysFromTimestamp(mainGeneratedAt);

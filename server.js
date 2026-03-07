@@ -11,10 +11,96 @@ const STATUS_API_CACHE_TTL_MS = Number(process.env.STATUS_API_CACHE_TTL_MS || 15
 const COMPOSITION_API_CACHE_TTL_MS = Number(
   process.env.COMPOSITION_API_CACHE_TTL_MS || 20_000
 );
+const ACCESS_LINK_TOKEN = String(process.env.ACCESS_LINK_TOKEN || "").trim();
+const ACCESS_COOKIE_NAME = String(process.env.ACCESS_COOKIE_NAME || "fi_access").trim();
+const ACCESS_COOKIE_MAX_AGE_SEC = Number(
+  process.env.ACCESS_COOKIE_MAX_AGE_SEC || 60 * 60 * 24 * 30
+);
 const API_CACHE_MAX_ENTRIES = Number(process.env.API_CACHE_MAX_ENTRIES || 300);
 const apiCache = new Map();
 
 app.use(compression({ threshold: 1024 }));
+
+function parseCookieHeader(cookieHeader) {
+  const out = {};
+  const raw = String(cookieHeader || "");
+  if (!raw) return out;
+  for (const pair of raw.split(";")) {
+    const idx = pair.indexOf("=");
+    if (idx <= 0) continue;
+    const key = pair.slice(0, idx).trim();
+    const value = pair.slice(idx + 1).trim();
+    if (!key) continue;
+    try {
+      out[key] = decodeURIComponent(value);
+    } catch {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+function hasAccessCookie(req) {
+  if (!ACCESS_LINK_TOKEN) return true;
+  const cookies = parseCookieHeader(req.headers.cookie);
+  return cookies[ACCESS_COOKIE_NAME] === ACCESS_LINK_TOKEN;
+}
+
+function setAccessCookie(res) {
+  const maxAge = Number.isFinite(ACCESS_COOKIE_MAX_AGE_SEC) && ACCESS_COOKIE_MAX_AGE_SEC > 0
+    ? Math.floor(ACCESS_COOKIE_MAX_AGE_SEC)
+    : 60 * 60 * 24 * 30;
+  const parts = [
+    `${ACCESS_COOKIE_NAME}=${encodeURIComponent(ACCESS_LINK_TOKEN)}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    `Max-Age=${maxAge}`,
+  ];
+  res.setHeader("Set-Cookie", parts.join("; "));
+}
+
+function stripAccessQuery(urlString) {
+  const text = String(urlString || "/");
+  const qIndex = text.indexOf("?");
+  if (qIndex < 0) return text || "/";
+  const base = text.slice(0, qIndex) || "/";
+  const params = new URLSearchParams(text.slice(qIndex + 1));
+  params.delete("access");
+  const qs = params.toString();
+  return qs ? `${base}?${qs}` : base;
+}
+
+app.use((req, res, next) => {
+  if (!ACCESS_LINK_TOKEN) {
+    next();
+    return;
+  }
+
+  // Let platform healthcheck pass even when app is private.
+  if (req.path === "/api/healthz") {
+    next();
+    return;
+  }
+
+  const accessFromQuery =
+    req.query && typeof req.query.access === "string"
+      ? req.query.access.trim()
+      : "";
+  if (accessFromQuery && accessFromQuery === ACCESS_LINK_TOKEN) {
+    setAccessCookie(res);
+    const redirectTo = stripAccessQuery(req.originalUrl || req.url || "/");
+    res.redirect(302, redirectTo);
+    return;
+  }
+
+  if (hasAccessCookie(req)) {
+    next();
+    return;
+  }
+
+  res.status(404).send("Not found");
+});
 
 function getApiCacheKey(req) {
   const params = new URLSearchParams();

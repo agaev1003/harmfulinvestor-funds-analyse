@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: harmful-funds-analysis
+    name: harmfulinvestor-funds-analyse
     env: node
     plan: free
     buildCommand: npm ci
@@ -21,6 +21,10 @@ services:
         value: 20000
       - key: COMPOSITION_CACHE_TTL_MS
         value: 172800000
+      - key: DAILY_MAIN_REFRESH_HOUR_MSK
+        value: 12
+      - key: DAILY_COMPOSITION_REFRESH_HOUR_MSK
+        value: 12
       - key: COMPOSITION_DELTA_MAX_PER_RUN
         value: 80
       - key: COMPOSITION_DELTA_MAX_FORCE_RUN
