@@ -18,6 +18,13 @@ const ACCESS_COOKIE_MAX_AGE_SEC = Number(
 );
 const API_CACHE_MAX_ENTRIES = Number(process.env.API_CACHE_MAX_ENTRIES || 300);
 const apiCache = new Map();
+const HEALTH_PATHS = new Set([
+  "/api/healthz",
+  "/healthz",
+  "/health",
+  "/ready",
+  "/live",
+]);
 
 app.use(compression({ threshold: 1024 }));
 
@@ -71,6 +78,10 @@ function stripAccessQuery(urlString) {
   return qs ? `${base}?${qs}` : base;
 }
 
+function isHealthcheckPath(pathname) {
+  return HEALTH_PATHS.has(String(pathname || "").trim());
+}
+
 app.use((req, res, next) => {
   if (!ACCESS_LINK_TOKEN) {
     next();
@@ -78,7 +89,7 @@ app.use((req, res, next) => {
   }
 
   // Let platform healthcheck pass even when app is private.
-  if (req.path === "/api/healthz") {
+  if (isHealthcheckPath(req.path)) {
     next();
     return;
   }
@@ -186,16 +197,18 @@ app.get("/api/funds", async (req, res) => {
   }
 });
 
-app.get("/api/healthz", (req, res) => {
-  sendJson(
-    res,
-    {
-      ok: true,
-      ts: new Date().toISOString(),
-    },
-    "no-store"
-  );
-});
+for (const healthPath of HEALTH_PATHS) {
+  app.get(healthPath, (req, res) => {
+    sendJson(
+      res,
+      {
+        ok: true,
+        ts: new Date().toISOString(),
+      },
+      "no-store"
+    );
+  });
+}
 
 app.get("/api/returns", async (req, res) => {
   try {
@@ -373,19 +386,23 @@ function startServer(port = PORT) {
     const actualPort =
       address && typeof address === "object" && address.port ? address.port : port;
     console.log(`Fund dashboard (independent): http://localhost:${actualPort}`);
-    // Preload disk/seed snapshots on cold start so first user request is fast.
-    provider
-      .getDataset()
-      .catch((error) =>
-        console.warn(`[warmup] dataset preload failed: ${String(error.message || error)}`)
-      );
-    provider
-      .getCompositionsPayload({ forceRefresh: false })
-      .catch((error) =>
-        console.warn(
-          `[warmup] compositions preload failed: ${String(error.message || error)}`
-        )
-      );
+    // Defer warmup slightly so platform probes can pass quickly on cold start.
+    const warmupTimer = setTimeout(() => {
+      // Preload disk/seed snapshots so first user request is fast.
+      provider
+        .getDataset()
+        .catch((error) =>
+          console.warn(`[warmup] dataset preload failed: ${String(error.message || error)}`)
+        );
+      provider
+        .getCompositionsPayload({ forceRefresh: false })
+        .catch((error) =>
+          console.warn(
+            `[warmup] compositions preload failed: ${String(error.message || error)}`
+          )
+        );
+    }, 300);
+    if (typeof warmupTimer.unref === "function") warmupTimer.unref();
   });
   return server;
 }

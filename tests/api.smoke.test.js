@@ -51,6 +51,13 @@ test("GET /api/healthz returns ok", async () => {
   assert.equal(typeof body.ts, "string");
 });
 
+test("GET /healthz returns ok (platform alias)", async () => {
+  const { res, body } = await fetchJson("/healthz", 15_000);
+  assert.equal(res.status, 200);
+  assert.equal(body.ok, true);
+  assert.equal(typeof body.ts, "string");
+});
+
 test("GET /api/status returns summary payload", async () => {
   const { res, body } = await fetchJson("/api/status");
   assert.equal(res.status, 200);
