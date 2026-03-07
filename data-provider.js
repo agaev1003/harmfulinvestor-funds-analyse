@@ -92,6 +92,9 @@ const state = {
   compositionsDiskLoaded: false,
   compositionsBuildPromise: null,
   compositionsAutoRefreshDate: null,
+  compositionsBuildState: null,
+  compositionsLastRun: null,
+  compositionsLastError: null,
   rankingIds: null,
   rankingIdsLoadedAt: 0,
 };
@@ -677,203 +680,262 @@ function pickCompositionRefreshCandidates(
 
 async function buildCompositionsDataset({ forceRefresh = false } = {}) {
   const startedAt = Date.now();
+  const runStats = {
+    startedAt: new Date().toISOString(),
+    mode: forceRefresh ? "forced-delta" : "delta",
+    candidateTotal: 0,
+    processed: 0,
+    successCount: 0,
+    noStructureCount: 0,
+    failedCount: 0,
+    errorSamples: [],
+  };
+  state.compositionsBuildState = runStats;
+  state.compositionsLastError = null;
+
+  const finalizeRun = ({ refreshedCount = 0 } = {}) => {
+    const durationSec = Math.max(
+      0,
+      Math.round(((Date.now() - startedAt) / 1000) * 10) / 10
+    );
+    const snapshot = {
+      startedAt: runStats.startedAt,
+      completedAt: new Date().toISOString(),
+      durationSec,
+      mode: runStats.mode,
+      candidateTotal: runStats.candidateTotal,
+      processed: runStats.processed,
+      successCount: runStats.successCount,
+      noStructureCount: runStats.noStructureCount,
+      failedCount: runStats.failedCount,
+      refreshedCount,
+      errorSamples: runStats.errorSamples.slice(0, 8),
+    };
+    state.compositionsLastRun = snapshot;
+    return snapshot;
+  };
+
   console.log(
     `[composition] Build started... mode=${forceRefresh ? "forced-delta" : "delta"}`
   );
-  // Use current dataset snapshot without forcing market rebuild;
-  // this keeps composition refresh lightweight on Render.
-  await ensureDiskLoaded();
-  const ds = state.dataset || (await getDataset());
-  const rankingIds = await fetchRankingFundIds();
-  const candidatesById = new Map(
-    ds.funds.map((fund) => [
-      String(fund.id),
-      {
-        id: Number(fund.id),
-        name: fund.name || null,
-        management_company: fund.management_company || null,
-      },
-    ])
-  );
-  for (const id of rankingIds) {
-    const key = String(id);
-    if (candidatesById.has(key)) continue;
-    candidatesById.set(key, {
-      id,
-      name: null,
-      management_company: null,
-    });
-  }
-  const candidates = [...candidatesById.values()];
+  try {
+    // Use current dataset snapshot without forcing market rebuild;
+    // this keeps composition refresh lightweight on Render.
+    await ensureDiskLoaded();
+    const ds = state.dataset || (await getDataset());
+    const rankingIds = await fetchRankingFundIds();
+    const candidatesById = new Map(
+      ds.funds.map((fund) => [
+        String(fund.id),
+        {
+          id: Number(fund.id),
+          name: fund.name || null,
+          management_company: fund.management_company || null,
+        },
+      ])
+    );
+    for (const id of rankingIds) {
+      const key = String(id);
+      if (candidatesById.has(key)) continue;
+      candidatesById.set(key, {
+        id,
+        name: null,
+        management_company: null,
+      });
+    }
+    const candidates = [...candidatesById.values()];
 
-  const previousDataset = await loadPreviousCompositionDataset();
-  const previousItems = previousDataset.items;
-  const previousChecksById =
-    previousDataset.checksById && typeof previousDataset.checksById === "object"
-      ? previousDataset.checksById
-      : {};
-  const previousById = new Map(
-    previousItems
-      .filter((item) => item && item.id != null)
-      .map((item) => [String(item.id), item])
-  );
+    const previousDataset = await loadPreviousCompositionDataset();
+    const previousItems = previousDataset.items;
+    const previousChecksById =
+      previousDataset.checksById && typeof previousDataset.checksById === "object"
+        ? previousDataset.checksById
+        : {};
+    const previousById = new Map(
+      previousItems
+        .filter((item) => item && item.id != null)
+        .map((item) => [String(item.id), item])
+    );
 
-  const checksById = { ...previousChecksById };
-  const refreshCandidates = pickCompositionRefreshCandidates(
-    candidates,
-    previousById,
-    previousChecksById,
-    { forceRefresh }
-  );
+    const checksById = { ...previousChecksById };
+    const refreshCandidates = pickCompositionRefreshCandidates(
+      candidates,
+      previousById,
+      previousChecksById,
+      { forceRefresh }
+    );
+    runStats.candidateTotal = refreshCandidates.length;
 
-  if (!refreshCandidates.length && previousItems.length) {
-    console.log("[composition] Delta build skipped: no due candidates.");
-    return {
-      version: COMPOSITION_DATASET_VERSION,
-      source: `${BASE_URL} + /fund-rankings/fund-yield/`,
-      // We still store current check time even if no candidates were due,
-      // so UI shows "last checked" instead of stale generation timestamp.
-      generatedAt: new Date().toISOString(),
-      fundUniverse: candidates.length,
-      refreshedCount: 0,
-      checksById,
-      items: previousItems
-        .slice()
-        .sort((a, b) =>
-          String(a.name || "").localeCompare(String(b.name || ""), "ru")
-        ),
-    };
-  }
-
-  console.log(
-    `[composition] Delta candidates: ${refreshCandidates.length}/${candidates.length}`
-  );
-
-  const withStructure = await mapLimit(
-    refreshCandidates,
-    COMPOSITION_CONCURRENCY,
-    async (candidate, idx) => {
-      const candidateId = String(candidate.id);
-      const previous = previousById.get(candidateId) || null;
-      const checkedAt = new Date().toISOString();
-      try {
-        const html = await fetchText(`${BASE_URL}/funds/${candidate.id}/`);
-        const structure = parseInvestfundsStructureFromHtml(html);
-        if (!structure || !structure.issuers.length) {
-          checksById[candidateId] = {
-            checked_at: checkedAt,
-            has_structure: false,
-            structure_date: null,
-          };
-          return previous || null;
-        }
-        const parsedMeta = parseFundMetaFromDetailHtml(html);
-        const changes = buildCompositionChanges(
-          structure.issuers,
-          previous && Array.isArray(previous.issuers) ? previous.issuers : [],
-          previous ? previous.structure_date : null
-        );
-        checksById[candidateId] = {
-          checked_at: checkedAt,
-          has_structure: true,
-          structure_date: structure.structure_date || null,
-        };
-
-        return {
-          id: String(candidate.id),
-          source_id: candidate.id,
-          name: candidate.name || parsedMeta.name || `Фонд ${candidate.id}`,
-          management_company:
-            candidate.management_company || parsedMeta.management_company || null,
-          structure_date: structure.structure_date || null,
-          checked_at: checkedAt,
-          issuers: structure.issuers,
-          changes,
-        };
-      } catch (error) {
-        console.warn(
-          `[composition] Structure parse failed for ${candidate.id}: ${String(
-            error.message || error
-          )}`
-        );
-        checksById[candidateId] = {
-          checked_at: checkedAt,
-          has_structure:
-            previous && Array.isArray(previous.issuers) && previous.issuers.length > 0,
-          structure_date: previous ? previous.structure_date || null : null,
-        };
-        return previous || null;
-      } finally {
-        if ((idx + 1) % 20 === 0 || idx + 1 === refreshCandidates.length) {
-          console.log(
-            `[composition] Parsed ${Math.min(
-              idx + 1,
-              refreshCandidates.length
-            )}/${refreshCandidates.length}`
-          );
-        }
-      }
-    },
-    { continueOnError: true }
-  );
-
-  const refreshedById = new Map();
-  for (const item of withStructure) {
-    if (!item || item.id == null) continue;
-    const id = String(item.id);
-    refreshedById.set(id, item);
-    if (!checksById[id]) {
-      checksById[id] = {
-        checked_at: item.checked_at || new Date().toISOString(),
-        has_structure: Array.isArray(item.issuers) && item.issuers.length > 0,
-        structure_date: item.structure_date || null,
+    if (!refreshCandidates.length && previousItems.length) {
+      console.log("[composition] Delta build skipped: no due candidates.");
+      const runSnapshot = finalizeRun({ refreshedCount: 0 });
+      return {
+        version: COMPOSITION_DATASET_VERSION,
+        source: `${BASE_URL} + /fund-rankings/fund-yield/`,
+        // We still store current check time even if no candidates were due,
+        // so UI shows "last checked" instead of stale generation timestamp.
+        generatedAt: new Date().toISOString(),
+        fundUniverse: candidates.length,
+        refreshedCount: 0,
+        checksById,
+        buildStats: runSnapshot,
+        items: previousItems
+          .slice()
+          .sort((a, b) =>
+            String(a.name || "").localeCompare(String(b.name || ""), "ru")
+          ),
       };
     }
-  }
 
-  const knownCandidateIds = new Set(candidates.map((c) => String(c.id)));
-  const mergedById = new Map();
+    console.log(
+      `[composition] Delta candidates: ${refreshCandidates.length}/${candidates.length}`
+    );
 
-  // Keep previous snapshot as baseline.
-  for (const [id, item] of previousById.entries()) {
-    if (!item) continue;
-    mergedById.set(id, item);
-  }
+    const withStructure = await mapLimit(
+      refreshCandidates,
+      COMPOSITION_CONCURRENCY,
+      async (candidate, idx) => {
+        const candidateId = String(candidate.id);
+        const previous = previousById.get(candidateId) || null;
+        const checkedAt = new Date().toISOString();
+        try {
+          const html = await fetchText(`${BASE_URL}/funds/${candidate.id}/`);
+          const structure = parseInvestfundsStructureFromHtml(html);
+          if (!structure || !structure.issuers.length) {
+            runStats.noStructureCount += 1;
+            checksById[candidateId] = {
+              checked_at: checkedAt,
+              has_structure: false,
+              structure_date: null,
+            };
+            return previous || null;
+          }
+          const parsedMeta = parseFundMetaFromDetailHtml(html);
+          const changes = buildCompositionChanges(
+            structure.issuers,
+            previous && Array.isArray(previous.issuers) ? previous.issuers : [],
+            previous ? previous.structure_date : null
+          );
+          checksById[candidateId] = {
+            checked_at: checkedAt,
+            has_structure: true,
+            structure_date: structure.structure_date || null,
+          };
+          runStats.successCount += 1;
 
-  // Apply refreshed rows on top.
-  for (const [id, item] of refreshedById.entries()) {
-    mergedById.set(id, item);
-  }
+          return {
+            id: String(candidate.id),
+            source_id: candidate.id,
+            name: candidate.name || parsedMeta.name || `Фонд ${candidate.id}`,
+            management_company:
+              candidate.management_company || parsedMeta.management_company || null,
+            structure_date: structure.structure_date || null,
+            checked_at: checkedAt,
+            issuers: structure.issuers,
+            changes,
+          };
+        } catch (error) {
+          runStats.failedCount += 1;
+          if (runStats.errorSamples.length < 8) {
+            runStats.errorSamples.push({
+              id: candidateId,
+              message: String(error.message || error).slice(0, 240),
+            });
+          }
+          console.warn(
+            `[composition] Structure parse failed for ${candidate.id}: ${String(
+              error.message || error
+            )}`
+          );
+          checksById[candidateId] = {
+            checked_at: checkedAt,
+            has_structure:
+              previous && Array.isArray(previous.issuers) && previous.issuers.length > 0,
+            structure_date: previous ? previous.structure_date || null : null,
+          };
+          return previous || null;
+        } finally {
+          runStats.processed += 1;
+          if ((idx + 1) % 20 === 0 || idx + 1 === refreshCandidates.length) {
+            console.log(
+              `[composition] Parsed ${Math.min(
+                idx + 1,
+                refreshCandidates.length
+              )}/${refreshCandidates.length}`
+            );
+          }
+        }
+      },
+      { continueOnError: true }
+    );
 
-  // Remove items that are definitely no longer in active universe and ranking scan.
-  for (const id of [...mergedById.keys()]) {
-    if (!knownCandidateIds.has(id)) {
-      mergedById.delete(id);
+    const refreshedById = new Map();
+    for (const item of withStructure) {
+      if (!item || item.id == null) continue;
+      const id = String(item.id);
+      refreshedById.set(id, item);
+      if (!checksById[id]) {
+        checksById[id] = {
+          checked_at: item.checked_at || new Date().toISOString(),
+          has_structure: Array.isArray(item.issuers) && item.issuers.length > 0,
+          structure_date: item.structure_date || null,
+        };
+      }
+    }
+
+    const knownCandidateIds = new Set(candidates.map((c) => String(c.id)));
+    const mergedById = new Map();
+
+    // Keep previous snapshot as baseline.
+    for (const [id, item] of previousById.entries()) {
+      if (!item) continue;
+      mergedById.set(id, item);
+    }
+
+    // Apply refreshed rows on top.
+    for (const [id, item] of refreshedById.entries()) {
+      mergedById.set(id, item);
+    }
+
+    // Remove items that are definitely no longer in active universe and ranking scan.
+    for (const id of [...mergedById.keys()]) {
+      if (!knownCandidateIds.has(id)) {
+        mergedById.delete(id);
+      }
+    }
+
+    const items = [...mergedById.values()]
+      .filter((item) => item && Array.isArray(item.issuers) && item.issuers.length > 0)
+      .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ru"));
+
+    const runSnapshot = finalizeRun({ refreshedCount: refreshCandidates.length });
+    const dataset = {
+      version: COMPOSITION_DATASET_VERSION,
+      source: `${BASE_URL} + /fund-rankings/fund-yield/`,
+      generatedAt: new Date().toISOString(),
+      fundUniverse: candidates.length,
+      refreshedCount: refreshCandidates.length,
+      checksById,
+      buildStats: runSnapshot,
+      items,
+    };
+
+    await fs.mkdir(path.dirname(COMPOSITION_CACHE_FILE), { recursive: true });
+    await fs.writeFile(COMPOSITION_CACHE_FILE, JSON.stringify(dataset), "utf8");
+
+    const sec = ((Date.now() - startedAt) / 1000).toFixed(1);
+    console.log(
+      `[composition] Build finished in ${sec}s. Refreshed: ${refreshCandidates.length}. Items: ${items.length}. Failed: ${runStats.failedCount}. Cache: ${COMPOSITION_CACHE_FILE}`
+    );
+    return dataset;
+  } catch (error) {
+    state.compositionsLastError = String(error.message || error);
+    throw error;
+  } finally {
+    if (state.compositionsBuildState === runStats) {
+      state.compositionsBuildState = null;
     }
   }
-
-  const items = [...mergedById.values()]
-    .filter((item) => item && Array.isArray(item.issuers) && item.issuers.length > 0)
-    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ru"));
-
-  const dataset = {
-    version: COMPOSITION_DATASET_VERSION,
-    source: `${BASE_URL} + /fund-rankings/fund-yield/`,
-    generatedAt: new Date().toISOString(),
-    fundUniverse: candidates.length,
-    refreshedCount: refreshCandidates.length,
-    checksById,
-    items,
-  };
-
-  await fs.mkdir(path.dirname(COMPOSITION_CACHE_FILE), { recursive: true });
-  await fs.writeFile(COMPOSITION_CACHE_FILE, JSON.stringify(dataset), "utf8");
-
-  const sec = ((Date.now() - startedAt) / 1000).toFixed(1);
-  console.log(
-    `[composition] Build finished in ${sec}s. Refreshed: ${refreshCandidates.length}. Items: ${items.length}. Cache: ${COMPOSITION_CACHE_FILE}`
-  );
-  return dataset;
 }
 
 async function mapLimit(items, limit, worker, { continueOnError = false } = {}) {
