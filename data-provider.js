@@ -645,7 +645,10 @@ async function buildCompositionsDataset({ forceRefresh = false } = {}) {
   console.log(
     `[composition] Build started... mode=${forceRefresh ? "forced-delta" : "delta"}`
   );
-  const ds = await getDataset();
+  // Use current dataset snapshot without forcing market rebuild;
+  // this keeps composition refresh lightweight on Render.
+  await ensureDiskLoaded();
+  const ds = state.dataset || (await getDataset());
   const rankingIds = await fetchRankingFundIds();
   const candidatesById = new Map(
     ds.funds.map((fund) => [
@@ -735,6 +738,11 @@ async function buildCompositionsDataset({ forceRefresh = false } = {}) {
           previous && Array.isArray(previous.issuers) ? previous.issuers : [],
           previous ? previous.structure_date : null
         );
+        checksById[candidateId] = {
+          checked_at: checkedAt,
+          has_structure: true,
+          structure_date: structure.structure_date || null,
+        };
 
         return {
           id: String(candidate.id),
@@ -1806,10 +1814,10 @@ async function getCompositionsPayload({ forceRefresh = false } = {}) {
 }
 
 async function getStatusSummary() {
-  const [mainDs, compDs] = await Promise.all([
-    getDataset(),
-    getCompositionsDataset({ forceRefresh: false }),
-  ]);
+  await Promise.all([ensureDiskLoaded(), ensureCompositionDiskLoaded()]);
+  const mainDs = state.dataset || (await getDataset());
+  const compDs =
+    state.compositions || (await getCompositionsDataset({ forceRefresh: false }));
 
   const mainGeneratedAt = mainDs && mainDs.generatedAt ? mainDs.generatedAt : null;
   const mainAgeDays = ageDaysFromTimestamp(mainGeneratedAt);

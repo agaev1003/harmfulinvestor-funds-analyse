@@ -436,6 +436,18 @@ body {
   text-align: left;
   font-weight: 500;
 }
+.summary-link-btn {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+}
+.summary-link-btn:hover {
+  text-decoration: underline;
+}
 .summary-tbl tr:last-child td { font-weight: 700; }
 .summary-tbl .pos { color: var(--green); }
 .summary-tbl .neg { color: var(--red); }
@@ -1117,6 +1129,17 @@ let fundRawData = [];
 let fundPeriod = '1Y';
 let fundFreq = 'day';
 let fundPctMode = false;
+let returnsByFundId = new Map();
+let fundsByNameKey = new Map();
+let fundsByMcKey = new Map();
+const NON_FUND_GROUP_LABELS = new Set([
+  'прочие',
+  'акции',
+  'смешанный',
+  'облигации',
+  'драгметаллы',
+  'денежный',
+]);
 
 // Tab 5 state
 let compositionData = [];
@@ -1181,8 +1204,6 @@ const COMPOSITION_TARGETS_RAW = [
   { query: 'Т-Капитал Локальные валютные облигации' },
   { query: 'Т-Капитал Облигации' },
   { query: 'Т-Капитал Трендовые акции' },
-  { query: 'Райффайзен - Корпоративные облигации' },
-  { query: 'Райффайзен - Акции' },
   { query: 'Рублевые перспективы' },
   { query: 'Флагманский' },
   { query: 'Валютные возможности' },
@@ -1201,6 +1222,7 @@ const COMPOSITION_TARGETS = dedupeCompositionTargets(COMPOSITION_TARGETS_RAW);
 async function init() {
   setupTabs();
   initCompositionModal();
+  initSummaryFundLinks();
   await refreshGlobalStatus();
   startStatusPolling();
   await loadFundsList();
@@ -1215,6 +1237,7 @@ async function init() {
 async function loadFundsList() {
   const res = await fetch('/api/funds');
   allFunds = await res.json();
+  rebuildFundLookupIndexes();
 }
 
 // ============================================================
@@ -1361,8 +1384,14 @@ function initTab1Filters() {
 async function loadReturnsData() {
   const res = await fetch('/api/returns');
   returnsData = await res.json();
+  returnsByFundId = new Map(
+    returnsData
+      .filter((row) => row && row.id != null)
+      .map((row) => [String(row.id), row])
+  );
   initTab1Filters();
   renderReturnsTable();
+  if (compositionLoaded) renderCompositionCards();
 }
 
 function renderReturnsTable() {
@@ -1481,8 +1510,14 @@ function renderMarketCharts() {
   // Summary tables (always full periods, ignoring period filter)
   renderSummaryTable('mktAumSummaryByType', d.byType, 'aum', TYPE_ORDER, 'pct');
   renderSummaryTable('mktFlowSummaryByType', d.byType, 'flow', TYPE_ORDER, 'abs');
-  renderSummaryTable('mktAumSummaryByMC', d.byMC, 'aum', mcOrder, 'pct');
-  renderSummaryTable('mktFlowSummaryByMC', d.byMC, 'flow', mcOrder, 'abs');
+  renderSummaryTable('mktAumSummaryByMC', d.byMC, 'aum', mcOrder, 'pct', {
+    enableFundLinks: true,
+    mcFallback: true,
+  });
+  renderSummaryTable('mktFlowSummaryByMC', d.byMC, 'flow', mcOrder, 'abs', {
+    enableFundLinks: true,
+    mcFallback: true,
+  });
 }
 
 // ============================================================
@@ -1565,8 +1600,14 @@ function renderMCCharts() {
   renderSummaryTable('mcAumSummaryByType', d.byType, 'aum', TYPE_ORDER, 'pct');
   renderSummaryTable('mcFlowSummaryByType', d.byType, 'flow', TYPE_ORDER, 'abs');
   const fo2 = [...(d.topFundNames || []), 'Прочие'];
-  renderSummaryTable('mcAumSummaryByFund', d.byFund, 'aum', fo2, 'pct');
-  renderSummaryTable('mcFlowSummaryByFund', d.byFund, 'flow', fo2, 'abs');
+  renderSummaryTable('mcAumSummaryByFund', d.byFund, 'aum', fo2, 'pct', {
+    enableFundLinks: true,
+    mcHint: mcSelectedMC,
+  });
+  renderSummaryTable('mcFlowSummaryByFund', d.byFund, 'flow', fo2, 'abs', {
+    enableFundLinks: true,
+    mcHint: mcSelectedMC,
+  });
 }
 
 // ============================================================
@@ -1819,6 +1860,81 @@ function initCompositionModal() {
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') closeCompositionModal();
   });
+}
+
+function initSummaryFundLinks() {
+  document.body.addEventListener('click', (event) => {
+    const btn = event.target.closest('.summary-link-btn');
+    if (!btn) return;
+    event.preventDefault();
+    const fundId = String(btn.dataset.fundId || '').trim();
+    if (!fundId) return;
+    openCompositionModalByFundId(fundId);
+  });
+}
+
+function rebuildFundLookupIndexes() {
+  const byName = new Map();
+  const byMc = new Map();
+  for (const fund of allFunds || []) {
+    if (!fund) continue;
+    const nameKey = normalizeNameForMatch(fund.name);
+    if (nameKey) {
+      if (!byName.has(nameKey)) byName.set(nameKey, []);
+      byName.get(nameKey).push(fund);
+    }
+    const mcKey = normalizeNameForMatch(fund.management_company);
+    if (mcKey) {
+      if (!byMc.has(mcKey)) byMc.set(mcKey, []);
+      byMc.get(mcKey).push(fund);
+    }
+  }
+  fundsByNameKey = byName;
+  fundsByMcKey = byMc;
+}
+
+function getFundAumScoreById(fundId) {
+  const row = returnsByFundId.get(String(fundId));
+  if (!row || row.aum == null) return 0;
+  const value = Number(row.aum);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function pickBestFundCandidate(candidates, { mcHint = '' } = {}) {
+  if (!Array.isArray(candidates) || !candidates.length) return null;
+  let list = candidates.slice();
+  const mcKey = normalizeNameForMatch(mcHint);
+  if (mcKey) {
+    const inMc = list.filter((f) => normalizeNameForMatch(f.management_company) === mcKey);
+    if (inMc.length) list = inMc;
+  }
+  list.sort((a, b) => {
+    const scoreDiff = getFundAumScoreById(b.id) - getFundAumScoreById(a.id);
+    if (scoreDiff !== 0) return scoreDiff;
+    return String(a.name || '').localeCompare(String(b.name || ''), 'ru');
+  });
+  return list[0] || null;
+}
+
+function resolveFundIdFromGroupLabel(label, { mcHint = '', mcFallback = false } = {}) {
+  const key = normalizeNameForMatch(label);
+  if (!key || NON_FUND_GROUP_LABELS.has(key)) return null;
+
+  let candidates = fundsByNameKey.get(key) || [];
+  if (!candidates.length && mcFallback) {
+    candidates = fundsByMcKey.get(key) || [];
+  }
+  if (!candidates.length) return null;
+
+  const fund = pickBestFundCandidate(candidates, { mcHint });
+  return fund ? String(fund.id) : null;
+}
+
+function getFundAumForCompositionCard(fundId) {
+  const row = returnsByFundId.get(String(fundId));
+  if (!row || row.aum == null) return null;
+  const value = Number(row.aum);
+  return Number.isFinite(value) ? value : null;
 }
 
 function closeCompositionModal() {
@@ -2096,15 +2212,18 @@ function renderCompositionCard(item) {
   const staleMarkDays = getCompositionStaleMarkDays();
   const staleDays = ageDaysFromIsoDate(item && item.structure_date);
   const isStale = staleDays != null && staleDays >= staleMarkDays;
+  const aumValue = getFundAumForCompositionCard(item && item.id);
   const dateLabel = item.structure_date
     ? `Срез: ${escapeHtml(formatDateHuman(item.structure_date))}`
     : 'Дата среза не указана';
   const typeLabel = item._fundType
     ? `Тип: ${item._fundType === 'биржевой' ? 'БПИФ' : 'ОПИФ'}`
     : null;
+  const aumLabel = aumValue != null ? `СЧА: ${escapeHtml(fmtAum(aumValue))}` : null;
   const metaParts = [
     `УК: ${escapeHtml(item.management_company || '—')}`,
     typeLabel,
+    aumLabel,
     dateLabel,
   ].filter(Boolean);
 
@@ -2454,7 +2573,7 @@ function getChartJSOpts(divisor, suffix, stacked, isBar) {
 // ============================================================
 // SHARED: Summary tables
 // ============================================================
-function renderSummaryTable(tableId, tsData, metric, groupOrder, mode) {
+function renderSummaryTable(tableId, tsData, metric, groupOrder, mode, options = {}) {
   // mode = 'pct' (AUM change %) or 'abs' (flow sum in billions)
   if (!tsData || !tsData.dates || tsData.dates.length === 0) return;
 
@@ -2483,7 +2602,17 @@ function renderSummaryTable(tableId, tsData, metric, groupOrder, mode) {
 
   activeGroups.forEach(g => {
     const vals = tsData.data[g][metric];
-    html += `<tr><td>${escapeHtml(g)}</td>`;
+    let firstCell = escapeHtml(g);
+    if (options.enableFundLinks) {
+      const fundId = resolveFundIdFromGroupLabel(g, {
+        mcHint: options.mcHint || '',
+        mcFallback: Boolean(options.mcFallback),
+      });
+      if (fundId) {
+        firstCell = `<button class="summary-link-btn" data-fund-id="${escapeAttr(fundId)}" title="Показать состав фонда">${escapeHtml(g)}</button>`;
+      }
+    }
+    html += `<tr><td>${firstCell}</td>`;
     periods.forEach((p, pi) => {
       const targetDate = p.ytd
         ? `${lastDateObj.getFullYear()}-01-01`
