@@ -1303,6 +1303,20 @@ function updateGlobalStatusPill(statusPayload) {
   const staleCount = Number.isFinite(Number(staleCountRaw)) ? Number(staleCountRaw) : null;
   const updatedAt = (compositions && compositions.generatedAt) ||
     (statusPayload && statusPayload.generatedAt) || null;
+  const progress = (compositions && compositions.progress && typeof compositions.progress === 'object')
+    ? compositions.progress
+    : null;
+  const progressTotalRaw = progress && progress.candidateTotal;
+  const progressDoneRaw = progress && progress.processed;
+  const progressTotal = Number.isFinite(Number(progressTotalRaw)) ? Number(progressTotalRaw) : null;
+  const progressDone = Number.isFinite(Number(progressDoneRaw)) ? Number(progressDoneRaw) : null;
+  const failedFundsRaw = (progress && progress.failedCount != null)
+    ? progress.failedCount
+    : (compositions && compositions.failedFunds);
+  const failedFunds = Number.isFinite(Number(failedFundsRaw)) ? Number(failedFundsRaw) : 0;
+  const lastError = (compositions && compositions.lastError)
+    ? String(compositions.lastError)
+    : '';
 
   const refreshing = Boolean(
     (statusPayload && statusPayload.refreshing &&
@@ -1312,6 +1326,16 @@ function updateGlobalStatusPill(statusPayload) {
 
   let text = `Обновлено: ${updatedAt ? formatDateTimeRu(updatedAt) : '--'}`;
   if (staleCount != null) text += ` · ${staleMarkDays}+д: ${staleCount}`;
+  if (
+    refreshing &&
+    progressTotal != null &&
+    progressDone != null &&
+    progressTotal > 0
+  ) {
+    text += ` · ${Math.min(progressDone, progressTotal)}/${progressTotal}`;
+  }
+  if (failedFunds > 0) text += ` · ошибок фондов: ${failedFunds}`;
+  if (lastError) text += ' · ошибка обновления';
   if (refreshing) text += ' · обновляем';
 
   el.textContent = text;
@@ -2108,6 +2132,17 @@ function renderCompositionCards() {
     return acc + ((age != null && age >= staleMarkDays) ? 1 : 0);
   }, 0);
   const refreshing = Boolean(compositionMeta && compositionMeta.refreshing);
+  const progress = (compositionMeta && compositionMeta.progress && typeof compositionMeta.progress === 'object')
+    ? compositionMeta.progress
+    : null;
+  const progressTotalRaw = progress && progress.candidateTotal;
+  const progressDoneRaw = progress && progress.processed;
+  const progressTotal = Number.isFinite(Number(progressTotalRaw)) ? Number(progressTotalRaw) : null;
+  const progressDone = Number.isFinite(Number(progressDoneRaw)) ? Number(progressDoneRaw) : null;
+  const failedFundsRaw = (progress && progress.failedCount != null)
+    ? progress.failedCount
+    : (compositionMeta && compositionMeta.failedFunds);
+  const failedFunds = Number.isFinite(Number(failedFundsRaw)) ? Number(failedFundsRaw) : 0;
   const missingPreview = missing.slice(0, 2).map((m) => m.query).join(', ');
   summaryEl.textContent =
     `Показано фондов: ${rows.length} из ${selected.length}` +
@@ -2115,6 +2150,10 @@ function renderCompositionCards() {
     ` · Без публичного состава: ${missing.length}` +
     ` · Устарели ${staleMarkDays}+д: ${staleCountShown}/${staleCountTotal}` +
     ` · Изменились: ${changedCount}` +
+    ((refreshing && progressTotal != null && progressDone != null && progressTotal > 0)
+      ? ` · Прогресс: ${Math.min(progressDone, progressTotal)}/${progressTotal}`
+      : '') +
+    (failedFunds > 0 ? ` · Ошибок фондов: ${failedFunds}` : '') +
     (refreshing ? ' · Обновляем в фоне' : '') +
     (missingPreview ? ` · Нет в данных: ${missingPreview}${missing.length > 2 ? ' ...' : ''}` : '');
 

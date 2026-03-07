@@ -18,6 +18,12 @@ const CACHE_TTL_MS = Number(
     (IS_RENDER ? 24 * 60 * 60 * 1000 : 12 * 60 * 60 * 1000)
 );
 const REQUEST_TIMEOUT_MS = Number(process.env.DATA_REQUEST_TIMEOUT_MS || 25_000);
+const COMPOSITION_REQUEST_TIMEOUT_MS = Number(
+  process.env.COMPOSITION_REQUEST_TIMEOUT_MS || (IS_RENDER ? 12_000 : 18_000)
+);
+const COMPOSITION_REQUEST_RETRIES = Number(
+  process.env.COMPOSITION_REQUEST_RETRIES || (IS_RENDER ? 0 : 1)
+);
 const MAX_LIST_PAGES = Number(process.env.MAX_LIST_PAGES || 75);
 const LIST_CONCURRENCY = Number(process.env.LIST_CONCURRENCY || (IS_RENDER ? 6 : 8));
 const DETAIL_CONCURRENCY = Number(
@@ -351,16 +357,22 @@ function shouldIncludeFund(row) {
 }
 
 async function fetchWithTimeout(url, options = {}) {
+  const timeoutMs =
+    Number.isFinite(Number(options.timeoutMs)) && Number(options.timeoutMs) > 0
+      ? Number(options.timeoutMs)
+      : REQUEST_TIMEOUT_MS;
+  const fetchOptions = { ...options };
+  delete fetchOptions.timeoutMs;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, {
-      ...options,
+      ...fetchOptions,
       signal: controller.signal,
       headers: {
         "user-agent": "fund-dashboard-local/1.0",
         accept: "text/html,application/json;q=0.9,*/*;q=0.8",
-        ...(options.headers || {}),
+        ...(fetchOptions.headers || {}),
       },
     });
     return response;
@@ -369,11 +381,11 @@ async function fetchWithTimeout(url, options = {}) {
   }
 }
 
-async function fetchText(url, retries = 2) {
+async function fetchText(url, retries = 2, requestOptions = {}) {
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
-      const response = await fetchWithTimeout(url);
+      const response = await fetchWithTimeout(url, requestOptions);
       if (!response.ok) {
         throw new Error(`HTTP ${response.status} for ${url}`);
       }
@@ -388,13 +400,15 @@ async function fetchText(url, retries = 2) {
   throw lastErr;
 }
 
-async function fetchJson(url, retries = 2) {
+async function fetchJson(url, retries = 2, requestOptions = {}) {
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
       const response = await fetchWithTimeout(url, {
+        ...requestOptions,
         headers: {
           accept: "application/json,text/javascript,*/*;q=0.9",
+          ...((requestOptions && requestOptions.headers) || {}),
         },
       });
       if (!response.ok) {
@@ -799,7 +813,11 @@ async function buildCompositionsDataset({ forceRefresh = false } = {}) {
         const previous = previousById.get(candidateId) || null;
         const checkedAt = new Date().toISOString();
         try {
-          const html = await fetchText(`${BASE_URL}/funds/${candidate.id}/`);
+          const html = await fetchText(
+            `${BASE_URL}/funds/${candidate.id}/`,
+            COMPOSITION_REQUEST_RETRIES,
+            { timeoutMs: COMPOSITION_REQUEST_TIMEOUT_MS }
+          );
           const structure = parseInvestfundsStructureFromHtml(html);
           if (!structure || !structure.issuers.length) {
             runStats.noStructureCount += 1;
@@ -1894,7 +1912,9 @@ async function getCompositionsDataset({ forceRefresh = false } = {}) {
 
     state.compositionsAutoRefreshDate = todayMsk;
     startCompositionsBuild({
-      force: true,
+      // Daily run should stay lightweight (regular delta mode).
+      // Forced mode is still available via manual refresh button.
+      force: false,
       resetDailyMarkOnFail: todayMsk,
     }).catch((error) => {
       console.warn(
@@ -1968,6 +1988,38 @@ function buildCompositionsMeta(ds) {
     if (!latestStructureDate || date > latestStructureDate) latestStructureDate = date;
   }
 
+  const dsBuildStats =
+    ds && ds.buildStats && typeof ds.buildStats === "object" ? ds.buildStats : null;
+  const buildState =
+    state.compositionsBuildState && typeof state.compositionsBuildState === "object"
+      ? state.compositionsBuildState
+      : null;
+  const lastRun =
+    state.compositionsLastRun && typeof state.compositionsLastRun === "object"
+      ? state.compositionsLastRun
+      : dsBuildStats;
+
+  const progress = buildState
+    ? {
+        startedAt: buildState.startedAt || null,
+        mode: buildState.mode || null,
+        candidateTotal: Number(buildState.candidateTotal) || 0,
+        processed: Number(buildState.processed) || 0,
+        successCount: Number(buildState.successCount) || 0,
+        noStructureCount: Number(buildState.noStructureCount) || 0,
+        failedCount: Number(buildState.failedCount) || 0,
+        errorSamples: Array.isArray(buildState.errorSamples)
+          ? buildState.errorSamples.slice(0, 8)
+          : [],
+      }
+    : null;
+
+  const failedFunds = progress
+    ? progress.failedCount
+    : lastRun && Number.isFinite(Number(lastRun.failedCount))
+      ? Number(lastRun.failedCount)
+      : 0;
+
   return {
     generatedAt: ds && ds.generatedAt ? ds.generatedAt : null,
     fundUniverse:
@@ -1980,6 +2032,30 @@ function buildCompositionsMeta(ds) {
     maxAgeDays,
     latestStructureDate: latestStructureDate || null,
     refreshing: Boolean(state.compositionsBuildPromise),
+    progress,
+    failedFunds,
+    lastError: state.compositionsLastError || null,
+    lastRun:
+      lastRun && typeof lastRun === "object"
+        ? {
+            startedAt: lastRun.startedAt || null,
+            completedAt: lastRun.completedAt || null,
+            durationSec:
+              Number.isFinite(Number(lastRun.durationSec)) && Number(lastRun.durationSec) >= 0
+                ? Number(lastRun.durationSec)
+                : null,
+            mode: lastRun.mode || null,
+            candidateTotal: Number(lastRun.candidateTotal) || 0,
+            processed: Number(lastRun.processed) || 0,
+            successCount: Number(lastRun.successCount) || 0,
+            noStructureCount: Number(lastRun.noStructureCount) || 0,
+            failedCount: Number(lastRun.failedCount) || 0,
+            refreshedCount: Number(lastRun.refreshedCount) || 0,
+            errorSamples: Array.isArray(lastRun.errorSamples)
+              ? lastRun.errorSamples.slice(0, 8)
+              : [],
+          }
+        : null,
   };
 }
 
