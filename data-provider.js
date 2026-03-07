@@ -95,6 +95,13 @@ const DAILY_COMPOSITION_REFRESH_HOUR_MSK = Number(
 const BUILD_FAIL_BACKOFF_MS = Number(
   process.env.BUILD_FAIL_BACKOFF_MS || (IS_RENDER ? 5 * 60 * 1000 : 60 * 1000)
 );
+const MAIN_BUILD_TIMEOUT_MS = Number(
+  process.env.MAIN_BUILD_TIMEOUT_MS || (IS_RENDER ? 10 * 60 * 1000 : 15 * 60 * 1000)
+);
+const COMPOSITION_BUILD_TIMEOUT_MS = Number(
+  process.env.COMPOSITION_BUILD_TIMEOUT_MS ||
+    (IS_RENDER ? 8 * 60 * 1000 : 12 * 60 * 1000)
+);
 
 const DATE_FMT_MSK = new Intl.DateTimeFormat("sv-SE", {
   timeZone: "Europe/Moscow",
@@ -181,6 +188,23 @@ function isGeneratedAfterMskHour(isoTs, hourMsk) {
   const d = new Date(ts);
   const h = mskHour(d);
   return h != null && h >= hourMsk;
+}
+
+async function withTimeout(promise, timeoutMs, label) {
+  const ms = Math.max(1_000, Number(timeoutMs) || 1_000);
+  let timer = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`${label} timeout after ${ms}ms`));
+        }, ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function readSeedJsonGz(filePath) {
@@ -1943,7 +1967,11 @@ async function getDataset() {
       return Promise.resolve(state.dataset);
     }
     if (state.buildPromise) return state.buildPromise;
-    state.buildPromise = buildDataset()
+    state.buildPromise = withTimeout(
+      buildDataset(),
+      MAIN_BUILD_TIMEOUT_MS,
+      "main build"
+    )
       .then((data) => {
         state.dataset = data;
         state.loadedAt = datasetTimestampMs(data);
@@ -2073,7 +2101,11 @@ async function getCompositionsDataset({ forceRefresh = false } = {}) {
       return Promise.resolve(state.compositions);
     }
     if (state.compositionsBuildPromise) return state.compositionsBuildPromise;
-    state.compositionsBuildPromise = buildCompositionsDataset({ forceRefresh: force })
+    state.compositionsBuildPromise = withTimeout(
+      buildCompositionsDataset({ forceRefresh: force }),
+      COMPOSITION_BUILD_TIMEOUT_MS,
+      "composition build"
+    )
       .then((data) => {
         state.compositions = data;
         state.compositionsLoadedAt = datasetTimestampMs(data);
