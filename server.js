@@ -369,7 +369,10 @@ app.get("*", (req, res) => {
 
 function startServer(port = PORT) {
   const server = app.listen(port, () => {
-    console.log(`Fund dashboard (independent): http://localhost:${port}`);
+    const address = server.address();
+    const actualPort =
+      address && typeof address === "object" && address.port ? address.port : port;
+    console.log(`Fund dashboard (independent): http://localhost:${actualPort}`);
     // Preload disk/seed snapshots on cold start so first user request is fast.
     provider
       .getDataset()

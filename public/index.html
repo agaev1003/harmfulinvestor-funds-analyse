@@ -1304,24 +1304,13 @@ function updateGlobalStatusPill(statusPayload) {
   );
   const staleCountRaw = compositions && compositions.staleCount;
   const staleCount = Number.isFinite(Number(staleCountRaw)) ? Number(staleCountRaw) : null;
-  const pickLatestTimestamp = (...values) => {
-    let best = null;
-    let bestTs = -1;
-    for (const value of values) {
-      const ts = Date.parse(String(value || ''));
-      if (!Number.isFinite(ts)) continue;
-      if (ts > bestTs) {
-        bestTs = ts;
-        best = value;
-      }
-    }
-    return best;
-  };
-  const updatedAt = pickLatestTimestamp(
-    compositions && compositions.generatedAt,
-    market && market.generatedAt,
-    statusPayload && statusPayload.generatedAt
-  );
+  // Primary "updated at" should reflect market dataset timestamp (main tabs),
+  // compositions timestamp is secondary and displayed via progress/errors below.
+  const updatedAt =
+    (statusPayload && statusPayload.generatedAt) ||
+    (market && market.generatedAt) ||
+    (compositions && compositions.generatedAt) ||
+    null;
 
   const progress = (compositions && compositions.progress && typeof compositions.progress === 'object')
     ? compositions.progress
@@ -1362,11 +1351,21 @@ function updateGlobalStatusPill(statusPayload) {
   const marketFailedBatches = Number.isFinite(Number(marketFailedBatchesRaw))
     ? Number(marketFailedBatchesRaw)
     : 0;
+  const marketFailedListPagesRaw = market && market.failedListPages;
+  const marketFailedListPages = Number.isFinite(Number(marketFailedListPagesRaw))
+    ? Number(marketFailedListPagesRaw)
+    : 0;
   const lastError = (compositions && compositions.lastError)
     ? String(compositions.lastError)
     : '';
   const marketLastError = (market && market.lastError)
     ? String(market.lastError)
+    : '';
+  const marketNextRetryAt = market && market.nextRetryAt
+    ? String(market.nextRetryAt)
+    : '';
+  const compositionsNextRetryAt = compositions && compositions.nextRetryAt
+    ? String(compositions.nextRetryAt)
     : '';
   const marketRefreshing = Boolean(
     statusPayload && statusPayload.refreshing && statusPayload.refreshing.market
@@ -1405,9 +1404,18 @@ function updateGlobalStatusPill(statusPayload) {
 
   if (marketFailedFunds > 0) text += ` · рынок ошибок фондов: ${marketFailedFunds}`;
   if (marketFailedBatches > 0) text += ` · рынок батч-ошибок: ${marketFailedBatches}`;
+  if (marketFailedListPages > 0) text += ` · рынок страниц-ошибок: ${marketFailedListPages}`;
   if (failedFunds > 0) text += ` · ошибок фондов: ${failedFunds}`;
   if (marketLastError) text += ' · ошибка обновления рынка';
   if (lastError) text += ' · ошибка обновления состава';
+  const nextRetryTs = Math.max(
+    Date.parse(marketNextRetryAt || ''),
+    Date.parse(compositionsNextRetryAt || '')
+  );
+  if (!refreshing && Number.isFinite(nextRetryTs) && nextRetryTs > Date.now()) {
+    const mins = Math.max(1, Math.ceil((nextRetryTs - Date.now()) / 60_000));
+    text += ` · пауза до ретрая ~${mins}м`;
+  }
   if (refreshing) text += ' · обновляем';
 
   el.textContent = text;

@@ -33,6 +33,12 @@ const SERIES_REQUEST_RETRIES = Number(
 const SERIES_SINGLE_FALLBACK_CONCURRENCY = Number(
   process.env.SERIES_SINGLE_FALLBACK_CONCURRENCY || (IS_RENDER ? 6 : 10)
 );
+const DETAIL_REQUEST_TIMEOUT_MS = Number(
+  process.env.DETAIL_REQUEST_TIMEOUT_MS || (IS_RENDER ? 12_000 : 18_000)
+);
+const DETAIL_REQUEST_RETRIES = Number(
+  process.env.DETAIL_REQUEST_RETRIES || (IS_RENDER ? 0 : 1)
+);
 const MAX_LIST_PAGES = Number(process.env.MAX_LIST_PAGES || 75);
 const LIST_CONCURRENCY = Number(process.env.LIST_CONCURRENCY || (IS_RENDER ? 6 : 8));
 const DETAIL_CONCURRENCY = Number(
@@ -86,6 +92,9 @@ const DAILY_COMPOSITION_REFRESH_HOUR_MSK = Number(
     process.env.DAILY_REFRESH_HOUR_MSK ||
     12
 );
+const BUILD_FAIL_BACKOFF_MS = Number(
+  process.env.BUILD_FAIL_BACKOFF_MS || (IS_RENDER ? 5 * 60 * 1000 : 60 * 1000)
+);
 
 const DATE_FMT_MSK = new Intl.DateTimeFormat("sv-SE", {
   timeZone: "Europe/Moscow",
@@ -100,11 +109,13 @@ const state = {
   dataset: null,
   loadedAt: 0,
   diskLoaded: false,
+  diskLoadPromise: null,
   buildPromise: null,
   datasetAutoRefreshDate: null,
   compositions: null,
   compositionsLoadedAt: 0,
   compositionsDiskLoaded: false,
+  compositionsDiskLoadPromise: null,
   compositionsBuildPromise: null,
   compositionsAutoRefreshDate: null,
   compositionsBuildState: null,
@@ -113,8 +124,10 @@ const state = {
   marketBuildState: null,
   marketLastRun: null,
   marketLastError: null,
+  marketNextRetryAt: 0,
   rankingIds: null,
   rankingIdsLoadedAt: 0,
+  compositionsNextRetryAt: 0,
 };
 
 function datasetTimestampMs(dataset) {
@@ -1081,7 +1094,11 @@ function parseDetailInfoMap($) {
 
 async function fetchFundDetails(row) {
   const url = `${BASE_URL}/funds/${row.id}/`;
-  const html = await fetchText(url);
+  const html = await fetchText(
+    url,
+    DETAIL_REQUEST_RETRIES,
+    { timeoutMs: DETAIL_REQUEST_TIMEOUT_MS }
+  );
   const $ = cheerio.load(html);
 
   const header = csvLikeText($(".widget_info_ttl").first().text());
@@ -1541,6 +1558,7 @@ async function buildDataset() {
     stage: "list-first-page",
     listPages: 0,
     listPagesParsed: 0,
+    listPagesFailed: 0,
     sourceFunds: 0,
     selectedFunds: 0,
     rankingAdded: 0,
@@ -1571,6 +1589,7 @@ async function buildDataset() {
       stage: runStats.stage,
       listPages: runStats.listPages,
       listPagesParsed: runStats.listPagesParsed,
+      listPagesFailed: runStats.listPagesFailed,
       sourceFunds: runStats.sourceFunds,
       selectedFunds: runStats.selectedFunds,
       rankingAdded: runStats.rankingAdded,
@@ -1607,16 +1626,27 @@ async function buildDataset() {
         pages,
         LIST_CONCURRENCY,
         async (page, i) => {
-          const html = await fetchText(
-            `${BASE_URL}/funds/?showID=54&limit=50&page=${page}`
-          );
-          const parsed = parseListPage(html);
-          runStats.listPagesParsed += 1;
-          if ((i + 1) % 10 === 0 || i + 1 === pages.length) {
-            console.log(`[data] Parsed list page ${page}/${maxPage}`);
+          try {
+            const html = await fetchText(
+              `${BASE_URL}/funds/?showID=54&limit=50&page=${page}`
+            );
+            const parsed = parseListPage(html);
+            runStats.listPagesParsed += 1;
+            if ((i + 1) % 10 === 0 || i + 1 === pages.length) {
+              console.log(`[data] Parsed list page ${page}/${maxPage}`);
+            }
+            return parsed.rows;
+          } catch (error) {
+            runStats.listPagesFailed += 1;
+            console.warn(
+              `[data] List page fetch failed ${page}/${maxPage}: ${String(
+                error.message || error
+              )}`
+            );
+            return [];
           }
-          return parsed.rows;
-        }
+        },
+        { continueOnError: true }
       );
       for (const rows of pageRows) {
         if (Array.isArray(rows)) rawRows.push(...rows);
@@ -1838,7 +1868,7 @@ async function buildDataset() {
 
     const sec = ((Date.now() - startedAt) / 1000).toFixed(1);
     console.log(
-      `[data] Build finished in ${sec}s. Funds=${funds.length}. Detail failed=${runStats.detailFailedCount}. History failed batches=${runStats.historyBatchFailed}. Cache: ${CACHE_FILE}`
+      `[data] Build finished in ${sec}s. Funds=${funds.length}. List page failed=${runStats.listPagesFailed}. Detail failed=${runStats.detailFailedCount}. History failed batches=${runStats.historyBatchFailed}. Cache: ${CACHE_FILE}`
     );
     return dataset;
   } catch (error) {
@@ -1864,39 +1894,60 @@ function isValidMainDataset(data) {
 
 async function ensureDiskLoaded() {
   if (state.diskLoaded) return;
-  state.diskLoaded = true;
-  try {
-    const raw = await fs.readFile(CACHE_FILE, "utf8");
-    const data = JSON.parse(raw);
-    if (isValidMainDataset(data)) {
-      state.dataset = data;
-      state.loadedAt = datasetTimestampMs(data);
-      console.log(`[data] Loaded cache from disk (${CACHE_FILE})`);
-    }
-  } catch {
-    // Cache file may not exist on first run
+  if (state.diskLoadPromise) {
+    await state.diskLoadPromise;
+    return;
   }
 
-  if (!state.dataset) {
-    const seedData = await readSeedJsonGz(DATASET_SEED_GZ_FILE);
-    if (isValidMainDataset(seedData)) {
-      state.dataset = seedData;
-      state.loadedAt = datasetTimestampMs(seedData);
-      console.log(`[data] Loaded seed cache (${DATASET_SEED_GZ_FILE})`);
-      persistCacheSnapshot(CACHE_FILE, seedData);
+  state.diskLoadPromise = (async () => {
+    try {
+      try {
+        const raw = await fs.readFile(CACHE_FILE, "utf8");
+        const data = JSON.parse(raw);
+        if (isValidMainDataset(data)) {
+          state.dataset = data;
+          state.loadedAt = datasetTimestampMs(data);
+          console.log(`[data] Loaded cache from disk (${CACHE_FILE})`);
+        }
+      } catch {
+        // Cache file may not exist on first run
+      }
+
+      if (!state.dataset) {
+        const seedData = await readSeedJsonGz(DATASET_SEED_GZ_FILE);
+        if (isValidMainDataset(seedData)) {
+          state.dataset = seedData;
+          state.loadedAt = datasetTimestampMs(seedData);
+          console.log(`[data] Loaded seed cache (${DATASET_SEED_GZ_FILE})`);
+          persistCacheSnapshot(CACHE_FILE, seedData);
+        }
+      }
+    } finally {
+      state.diskLoaded = true;
+      state.diskLoadPromise = null;
     }
-  }
+  })();
+
+  await state.diskLoadPromise;
 }
 
 async function getDataset() {
   await ensureDiskLoaded();
 
   const startDatasetBuild = ({ resetDailyMarkOnFail = null } = {}) => {
+    if (
+      state.dataset &&
+      state.marketNextRetryAt &&
+      Date.now() < state.marketNextRetryAt
+    ) {
+      return Promise.resolve(state.dataset);
+    }
     if (state.buildPromise) return state.buildPromise;
     state.buildPromise = buildDataset()
       .then((data) => {
         state.dataset = data;
         state.loadedAt = datasetTimestampMs(data);
+        state.marketNextRetryAt = 0;
         return data;
       })
       .catch((error) => {
@@ -1906,6 +1957,7 @@ async function getDataset() {
         ) {
           state.datasetAutoRefreshDate = null;
         }
+        state.marketNextRetryAt = Date.now() + Math.max(10_000, BUILD_FAIL_BACKOFF_MS);
         throw error;
       })
       .finally(() => {
@@ -1964,32 +2016,45 @@ function isValidCompositionDataset(data) {
 
 async function ensureCompositionDiskLoaded() {
   if (state.compositionsDiskLoaded) return;
-  state.compositionsDiskLoaded = true;
-  try {
-    const raw = await fs.readFile(COMPOSITION_CACHE_FILE, "utf8");
-    const data = JSON.parse(raw);
-    if (isValidCompositionDataset(data)) {
-      state.compositions = data;
-      state.compositionsLoadedAt = datasetTimestampMs(data);
-      console.log(
-        `[composition] Loaded cache from disk (${COMPOSITION_CACHE_FILE})`
-      );
-    }
-  } catch {
-    // Cache file may not exist on first run
+  if (state.compositionsDiskLoadPromise) {
+    await state.compositionsDiskLoadPromise;
+    return;
   }
 
-  if (!state.compositions) {
-    const seedData = await readSeedJsonGz(COMPOSITION_SEED_GZ_FILE);
-    if (isValidCompositionDataset(seedData)) {
-      state.compositions = seedData;
-      state.compositionsLoadedAt = datasetTimestampMs(seedData);
-      console.log(
-        `[composition] Loaded seed cache (${COMPOSITION_SEED_GZ_FILE})`
-      );
-      persistCacheSnapshot(COMPOSITION_CACHE_FILE, seedData);
+  state.compositionsDiskLoadPromise = (async () => {
+    try {
+      try {
+        const raw = await fs.readFile(COMPOSITION_CACHE_FILE, "utf8");
+        const data = JSON.parse(raw);
+        if (isValidCompositionDataset(data)) {
+          state.compositions = data;
+          state.compositionsLoadedAt = datasetTimestampMs(data);
+          console.log(
+            `[composition] Loaded cache from disk (${COMPOSITION_CACHE_FILE})`
+          );
+        }
+      } catch {
+        // Cache file may not exist on first run
+      }
+
+      if (!state.compositions) {
+        const seedData = await readSeedJsonGz(COMPOSITION_SEED_GZ_FILE);
+        if (isValidCompositionDataset(seedData)) {
+          state.compositions = seedData;
+          state.compositionsLoadedAt = datasetTimestampMs(seedData);
+          console.log(
+            `[composition] Loaded seed cache (${COMPOSITION_SEED_GZ_FILE})`
+          );
+          persistCacheSnapshot(COMPOSITION_CACHE_FILE, seedData);
+        }
+      }
+    } finally {
+      state.compositionsDiskLoaded = true;
+      state.compositionsDiskLoadPromise = null;
     }
-  }
+  })();
+
+  await state.compositionsDiskLoadPromise;
 }
 
 async function getCompositionsDataset({ forceRefresh = false } = {}) {
@@ -1999,11 +2064,20 @@ async function getCompositionsDataset({ forceRefresh = false } = {}) {
     force = false,
     resetDailyMarkOnFail = null,
   } = {}) => {
+    if (
+      !force &&
+      state.compositions &&
+      state.compositionsNextRetryAt &&
+      Date.now() < state.compositionsNextRetryAt
+    ) {
+      return Promise.resolve(state.compositions);
+    }
     if (state.compositionsBuildPromise) return state.compositionsBuildPromise;
     state.compositionsBuildPromise = buildCompositionsDataset({ forceRefresh: force })
       .then((data) => {
         state.compositions = data;
         state.compositionsLoadedAt = datasetTimestampMs(data);
+        state.compositionsNextRetryAt = 0;
         return data;
       })
       .catch((error) => {
@@ -2012,6 +2086,10 @@ async function getCompositionsDataset({ forceRefresh = false } = {}) {
           state.compositionsAutoRefreshDate === resetDailyMarkOnFail
         ) {
           state.compositionsAutoRefreshDate = null;
+        }
+        if (!force) {
+          state.compositionsNextRetryAt =
+            Date.now() + Math.max(10_000, BUILD_FAIL_BACKOFF_MS);
         }
         throw error;
       })
@@ -2178,6 +2256,10 @@ function buildCompositionsMeta(ds) {
     progress,
     failedFunds,
     lastError: state.compositionsLastError || null,
+    nextRetryAt:
+      state.compositionsNextRetryAt && state.compositionsNextRetryAt > Date.now()
+        ? new Date(state.compositionsNextRetryAt).toISOString()
+        : null,
     lastRun:
       lastRun && typeof lastRun === "object"
         ? {
@@ -2248,6 +2330,9 @@ async function getStatusSummary() {
       progress: marketBuildState
         ? {
             stage: marketBuildState.stage || null,
+            listPages: Number(marketBuildState.listPages) || 0,
+            listPagesParsed: Number(marketBuildState.listPagesParsed) || 0,
+            listPagesFailed: Number(marketBuildState.listPagesFailed) || 0,
             detailsTotal: Number(marketBuildState.detailsTotal) || 0,
             detailsProcessed: Number(marketBuildState.detailsProcessed) || 0,
             detailFailedCount: Number(marketBuildState.detailFailedCount) || 0,
@@ -2268,7 +2353,16 @@ async function getStatusSummary() {
         : marketLastRun
           ? Number(marketLastRun.historyBatchFailed) || 0
           : 0,
+      failedListPages: marketBuildState
+        ? Number(marketBuildState.listPagesFailed) || 0
+        : marketLastRun
+          ? Number(marketLastRun.listPagesFailed) || 0
+          : 0,
       lastError: state.marketLastError || null,
+      nextRetryAt:
+        state.marketNextRetryAt && state.marketNextRetryAt > Date.now()
+          ? new Date(state.marketNextRetryAt).toISOString()
+          : null,
       lastRun: marketLastRun || null,
     },
     compositions: buildCompositionsMeta(compDs),
