@@ -731,9 +731,9 @@ async function buildCompositionsDataset({ forceRefresh = false } = {}) {
     return {
       version: COMPOSITION_DATASET_VERSION,
       source: `${BASE_URL} + /fund-rankings/fund-yield/`,
-      generatedAt:
-        (state.compositions && state.compositions.generatedAt) ||
-        new Date().toISOString(),
+      // We still store current check time even if no candidates were due,
+      // so UI shows "last checked" instead of stale generation timestamp.
+      generatedAt: new Date().toISOString(),
       fundUniverse: candidates.length,
       refreshedCount: 0,
       checksById,
