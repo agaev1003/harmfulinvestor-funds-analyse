@@ -1,0 +1,11 @@
+node_modules
+.git
+.cache
+*.log
+.DS_Store
+
+# Local desktop app artifacts are not needed in cloud deploy
+Аналитика фондов.app
+launch-app.sh
+start-app.command
+launcher.applescript

@@ -5,6 +5,7 @@ const provider = require("./data-provider");
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
+const HOST = String(process.env.HOST || "0.0.0.0");
 const API_CACHE_TTL_MS = Number(process.env.API_CACHE_TTL_MS || 60_000);
 const NAV_API_CACHE_TTL_MS = Number(process.env.NAV_API_CACHE_TTL_MS || 120_000);
 const STATUS_API_CACHE_TTL_MS = Number(process.env.STATUS_API_CACHE_TTL_MS || 15_000);
@@ -380,12 +381,18 @@ app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
-function startServer(port = PORT) {
-  const server = app.listen(port, () => {
+function startServer(port = PORT, host = HOST) {
+  const server = app.listen(port, host, () => {
     const address = server.address();
     const actualPort =
       address && typeof address === "object" && address.port ? address.port : port;
-    console.log(`Fund dashboard (independent): http://localhost:${actualPort}`);
+    const actualHost =
+      address && typeof address === "object" && address.address
+        ? address.address
+        : host;
+    console.log(
+      `Fund dashboard (independent): http://${actualHost}:${actualPort}`
+    );
     // Defer warmup slightly so platform probes can pass quickly on cold start.
     const warmupTimer = setTimeout(() => {
       // Preload disk/seed snapshots so first user request is fast.
