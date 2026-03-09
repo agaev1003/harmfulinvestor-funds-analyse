@@ -19,6 +19,13 @@ const ACCESS_COOKIE_MAX_AGE_SEC = Number(
 );
 const API_CACHE_MAX_ENTRIES = Number(process.env.API_CACHE_MAX_ENTRIES || 300);
 const apiCache = new Map();
+const IS_APP_CONTAINER_DIR = path.resolve(__dirname) === "/app";
+const STARTUP_WARMUP_ENABLED =
+  process.env.STARTUP_WARMUP_ENABLED != null
+    ? !["0", "false", "no"].includes(
+        String(process.env.STARTUP_WARMUP_ENABLED).trim().toLowerCase()
+      )
+    : !IS_APP_CONTAINER_DIR;
 const HEALTH_PATHS = new Set([
   "/api/healthz",
   "/healthz",
@@ -393,6 +400,7 @@ function startServer(port = PORT, host = HOST) {
     console.log(
       `Fund dashboard (independent): http://${actualHost}:${actualPort}`
     );
+    if (!STARTUP_WARMUP_ENABLED) return;
     // Defer warmup slightly so platform probes can pass quickly on cold start.
     const warmupTimer = setTimeout(() => {
       // Preload disk/seed snapshots so first user request is fast.

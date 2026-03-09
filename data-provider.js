@@ -5,9 +5,15 @@ const zlib = require("zlib");
 
 const IS_RENDER = Boolean(process.env.RENDER);
 const BASE_URL = process.env.DATA_SOURCE_BASE || "https://investfunds.ru";
+const IS_APP_CONTAINER_DIR = path.resolve(__dirname) === "/app";
+const DEFAULT_CACHE_DIR =
+  process.env.DATA_CACHE_DIR ||
+  (IS_APP_CONTAINER_DIR
+    ? path.join(process.env.TMPDIR || "/tmp", "fund-dashboard-cache")
+    : path.join(__dirname, ".cache"));
 const CACHE_FILE =
   process.env.DATA_CACHE_FILE ||
-  path.join(__dirname, ".cache", "fund-dashboard-data.json");
+  path.join(DEFAULT_CACHE_DIR, "fund-dashboard-data.json");
 const DATASET_SEED_GZ_FILE =
   process.env.DATASET_SEED_GZ_FILE ||
   path.join(__dirname, "seed-cache", "fund-dashboard-data.json.gz");
@@ -52,7 +58,7 @@ const HISTORY_LOOKBACK_DAYS = Number(process.env.HISTORY_LOOKBACK_DAYS || 14);
 const TOP_GROUP_COUNT = Number(process.env.TOP_GROUP_COUNT || 9);
 const COMPOSITION_CACHE_FILE =
   process.env.COMPOSITION_CACHE_FILE ||
-  path.join(__dirname, ".cache", "fund-compositions.json");
+  path.join(DEFAULT_CACHE_DIR, "fund-compositions.json");
 const COMPOSITION_SEED_GZ_FILE =
   process.env.COMPOSITION_SEED_GZ_FILE ||
   path.join(__dirname, "seed-cache", "fund-compositions.json.gz");
@@ -226,8 +232,11 @@ async function persistCacheSnapshot(filePath, data) {
   try {
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, JSON.stringify(data), "utf8");
-  } catch {
+  } catch (error) {
     // Non-fatal: runtime can still operate from in-memory data.
+    console.warn(
+      `[cache] Persist skipped for ${filePath}: ${String(error.message || error)}`
+    );
   }
 }
 
@@ -987,8 +996,7 @@ async function buildCompositionsDataset({ forceRefresh = false } = {}) {
       items,
     };
 
-    await fs.mkdir(path.dirname(COMPOSITION_CACHE_FILE), { recursive: true });
-    await fs.writeFile(COMPOSITION_CACHE_FILE, JSON.stringify(dataset), "utf8");
+    await persistCacheSnapshot(COMPOSITION_CACHE_FILE, dataset);
 
     const sec = ((Date.now() - startedAt) / 1000).toFixed(1);
     console.log(
@@ -1887,8 +1895,7 @@ async function buildDataset() {
       buildStats: runSnapshot,
     };
 
-    await fs.mkdir(path.dirname(CACHE_FILE), { recursive: true });
-    await fs.writeFile(CACHE_FILE, JSON.stringify(dataset), "utf8");
+    await persistCacheSnapshot(CACHE_FILE, dataset);
 
     const sec = ((Date.now() - startedAt) / 1000).toFixed(1);
     console.log(
