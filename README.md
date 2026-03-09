@@ -73,4 +73,3 @@ http://localhost:3000
 ## Источник данных
 
 Сейчас источник данных независимый: `https://investfunds.ru`  
-(без использования API проекта друга `fund-dashboard-gilt.vercel.app`).
