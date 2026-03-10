@@ -385,7 +385,7 @@ body {
 }
 .strategies-table .name-cell {
   min-width: 260px;
-  max-width: 360px;
+  max-width: 420px;
 }
 .strategies-table .strategy-name {
   color: var(--text-primary);
@@ -395,13 +395,6 @@ body {
   color: var(--text-secondary);
   font-size: 11px;
   margin-top: 2px;
-}
-.strategies-table .fees-cell,
-.strategies-table .portfolio-cell {
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .strategies-table tbody tr.selected {
   box-shadow: inset 0 0 0 1px rgba(255, 18, 61, 0.55);
@@ -468,6 +461,39 @@ body {
 .strategy-chart-card {
   height: 300px;
 }
+.strategy-benchmark-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.strategy-benchmark-table th,
+.strategy-benchmark-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--soft-divider);
+  font-size: 12px;
+}
+.strategy-benchmark-table th {
+  color: var(--text-secondary);
+  font-weight: 600;
+  text-align: left;
+}
+.strategy-benchmark-table td.num,
+.strategy-benchmark-table th.num {
+  text-align: right;
+}
+.strategy-benchmark-table tr:last-child td {
+  border-bottom: none;
+}
+.strategy-panel-block-title {
+  margin: 0 0 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+.strategy-details-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr);
+  gap: 12px;
+}
 .strategy-portfolio-list {
   list-style: none;
   margin: 0;
@@ -486,6 +512,11 @@ body {
 }
 .strategy-portfolio-list li:last-child {
   border-bottom: none;
+}
+.strategy-deals-empty-note {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 /* ============================================================
@@ -911,6 +942,9 @@ body {
   .strategies-table-wrap {
     max-height: 52vh;
   }
+  .strategy-details-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 760px) {
@@ -1191,16 +1225,12 @@ body {
             <th data-col="clients" class="num">Клиенты</th>
             <th data-col="allTimeReturnPct" class="num sorted-desc">За все время</th>
             <th data-col="return12mPct" class="num">12м</th>
-            <th data-col="expectedReturnPct" class="num">Прогноз</th>
-            <th data-col="minAmountValue" class="num">Мин. сумма</th>
-            <th data-col="riskLabel">Риск</th>
-            <th data-col="feesText">Комиссии</th>
-            <th data-col="topCompaniesText">Портфель (топ)</th>
+            <th data-col="managedAmountValue" class="num">В управлении</th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td colspan="9" style="text-align:center;color:var(--text-secondary);padding:16px;">Откройте вкладку для загрузки стратегий</td>
+            <td colspan="5" style="text-align:center;color:var(--text-secondary);padding:16px;">Откройте вкладку для загрузки стратегий</td>
           </tr>
         </tbody>
       </table>
@@ -1221,10 +1251,40 @@ body {
       </div>
 
       <div class="summary-table-card">
-        <h3>Состав портфеля (топ-10)</h3>
-        <ul class="strategy-portfolio-list" id="strategyPortfolioList">
-          <li><span>Нет данных</span><span></span></li>
-        </ul>
+        <h3>Сравнение с бенчмарком</h3>
+        <table class="strategy-benchmark-table" id="strategyBenchmarkTable">
+          <thead>
+            <tr>
+              <th>Период</th>
+              <th class="num">Стратегия</th>
+              <th class="num">Бенчмарк</th>
+              <th class="num">Альфа</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td colspan="4" style="text-align:center;color:var(--text-secondary);padding:10px;">Выберите стратегию</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="summary-table-card">
+        <h3>Состав портфеля и последние сделки</h3>
+        <div class="strategy-details-grid">
+          <div>
+            <h4 class="strategy-panel-block-title">Состав портфеля (топ-10)</h4>
+            <ul class="strategy-portfolio-list" id="strategyPortfolioList">
+              <li><span>Нет данных</span><span></span></li>
+            </ul>
+          </div>
+          <div>
+            <h4 class="strategy-panel-block-title">Последние сделки</h4>
+            <ul class="strategy-portfolio-list" id="strategyDealsList">
+              <li><span>Нет данных</span><span></span></li>
+            </ul>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -2001,8 +2061,7 @@ const STRATEGY_NUMERIC_COLS = new Set([
   'clients',
   'allTimeReturnPct',
   'return12mPct',
-  'expectedReturnPct',
-  'minAmountValue',
+  'managedAmountValue',
 ]);
 
 function initTabStrategies() {
@@ -2052,7 +2111,7 @@ async function loadStrategiesData(forceRefresh = false, options = {}) {
   }
   if (!silent && tbody && !strategiesLoaded) {
     tbody.innerHTML =
-      '<tr><td colspan=\"9\" style=\"text-align:center;color:var(--text-secondary);padding:16px;\">Загрузка стратегий...</td></tr>';
+      '<tr><td colspan=\"5\" style=\"text-align:center;color:var(--text-secondary);padding:16px;\">Загрузка стратегий...</td></tr>';
   }
 
   try {
@@ -2086,17 +2145,19 @@ async function loadStrategiesData(forceRefresh = false, options = {}) {
       });
     } else {
       setStrategyChartPlaceholder('Динамика портфеля');
+      renderStrategyBenchmarkTable();
     }
   } catch (error) {
     console.warn(`[strategies] ${String(error.message || error)}`);
     strategiesLoaded = false;
     if (tbody) {
-      tbody.innerHTML = `<tr><td colspan=\"9\" style=\"text-align:center;color:var(--red);padding:16px;\">${escapeHtml(
+      tbody.innerHTML = `<tr><td colspan=\"5\" style=\"text-align:center;color:var(--red);padding:16px;\">${escapeHtml(
         String(error.message || error)
       )}</td></tr>`;
     }
     if (summaryEl) summaryEl.textContent = 'Стратегии не загружены';
     setStrategyChartPlaceholder('Динамика портфеля');
+    renderStrategyBenchmarkTable();
   }
 }
 
@@ -2130,6 +2191,30 @@ function fmtInteger(value) {
   return Math.round(Number(value)).toLocaleString('ru-RU');
 }
 
+function fmtMoneyCompactRub(value) {
+  if (!Number.isFinite(Number(value))) return '—';
+  const num = Number(value);
+  const abs = Math.abs(num);
+  if (abs >= 1e9) {
+    return `${(num / 1e9).toLocaleString('ru-RU', { maximumFractionDigits: 2 })} млрд ₽`;
+  }
+  if (abs >= 1e6) {
+    return `${(num / 1e6).toLocaleString('ru-RU', { maximumFractionDigits: 2 })} млн ₽`;
+  }
+  if (abs >= 1e3) {
+    return `${(num / 1e3).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} тыс ₽`;
+  }
+  return `${Math.round(num).toLocaleString('ru-RU')} ₽`;
+}
+
+function formatManagedAmountText(item) {
+  if (item && item.managedAmountText) return String(item.managedAmountText);
+  if (item && Number.isFinite(Number(item.managedAmountValue))) {
+    return fmtMoneyCompactRub(Number(item.managedAmountValue));
+  }
+  return '—';
+}
+
 function signedPercentText(value, digits = 1) {
   if (!Number.isFinite(Number(value))) return '—';
   const num = Number(value);
@@ -2153,18 +2238,12 @@ function renderStrategiesTable() {
   if (!tbody) return;
   if (!rows.length) {
     tbody.innerHTML =
-      '<tr><td colspan=\"9\" style=\"text-align:center;color:var(--text-secondary);padding:16px;\">Нет доступных стратегий</td></tr>';
+      '<tr><td colspan=\"5\" style=\"text-align:center;color:var(--text-secondary);padding:16px;\">Нет доступных стратегий</td></tr>';
   } else {
     tbody.innerHTML = rows.map((row) => {
       const id = String(row.id || '');
       const selectedClass = id === String(strategiesSelectedId) ? ' selected' : '';
-      const minAmountText = row.minAmountText
-        ? String(row.minAmountText)
-        : Number.isFinite(Number(row.minAmountValue))
-          ? `${Math.round(Number(row.minAmountValue)).toLocaleString('ru-RU')} ₽`
-          : '—';
-      const feesText = row.feesText || '—';
-      const portfolioText = row.topCompaniesText || '—';
+      const managedAmountText = formatManagedAmountText(row);
       return `<tr data-id=\"${escapeAttr(id)}\" class=\"${selectedClass.trim()}\">
         <td class=\"name-cell\" title=\"${escapeAttr(row.title || '')}\">
           <div class=\"strategy-name\">${escapeHtml(row.title || '—')}</div>
@@ -2173,11 +2252,7 @@ function renderStrategiesTable() {
         <td class=\"num\">${escapeHtml(fmtInteger(row.clients))}</td>
         ${renderStrategyPctCell(row.allTimeReturnPct)}
         ${renderStrategyPctCell(row.return12mPct)}
-        ${renderStrategyPctCell(row.expectedReturnPct)}
-        <td class=\"num\">${escapeHtml(minAmountText)}</td>
-        <td>${escapeHtml(row.riskLabel || '—')}</td>
-        <td class=\"fees-cell\" title=\"${escapeAttr(feesText)}\">${escapeHtml(feesText)}</td>
-        <td class=\"portfolio-cell\" title=\"${escapeAttr(portfolioText)}\">${escapeHtml(portfolioText)}</td>
+        <td class=\"num\">${escapeHtml(managedAmountText)}</td>
       </tr>`;
     }).join('');
   }
@@ -2224,6 +2299,7 @@ function renderSelectedStrategyInfo() {
   const metaEl = document.getElementById('strategyMetaGrid');
   const descEl = document.getElementById('strategyDescription');
   const listEl = document.getElementById('strategyPortfolioList');
+  const dealsEl = document.getElementById('strategyDealsList');
   const item = getSelectedStrategyItem();
 
   if (!item) {
@@ -2232,6 +2308,8 @@ function renderSelectedStrategyInfo() {
     metaEl.innerHTML = '';
     descEl.textContent = 'Здесь появится описание стратегии и ключевые параметры.';
     listEl.innerHTML = '<li><span>Нет данных</span><span></span></li>';
+    if (dealsEl) dealsEl.innerHTML = '<li><span>Нет данных</span><span></span></li>';
+    renderStrategyBenchmarkTable();
     return;
   }
 
@@ -2247,11 +2325,12 @@ function renderSelectedStrategyInfo() {
     : Number.isFinite(Number(item.minAmountValue))
       ? `${Math.round(Number(item.minAmountValue)).toLocaleString('ru-RU')} ₽`
       : '—';
+  const managedAmountText = formatManagedAmountText(item);
 
   const metaRows = [
     { label: 'Доходность, все время', value: signedPercentText(item.allTimeReturnPct, 1) },
     { label: 'Доходность, 12м', value: signedPercentText(item.return12mPct, 1) },
-    { label: 'Прогноз', value: signedPercentText(item.expectedReturnPct, 1) },
+    { label: 'В управлении', value: managedAmountText },
     { label: 'Подписчиков', value: fmtInteger(item.clients) },
     { label: 'Мин. сумма', value: minAmountText },
     { label: 'Риск', value: item.riskLabel || '—' },
@@ -2284,6 +2363,110 @@ function renderSelectedStrategyInfo() {
   } else {
     listEl.innerHTML = '<li><span>Нет данных по составу</span><span></span></li>';
   }
+
+  if (dealsEl) {
+    const recentDeals = Array.isArray(item.recentDeals) ? item.recentDeals : [];
+    if (recentDeals.length > 0) {
+      dealsEl.innerHTML = recentDeals.slice(0, 10).map((row) => {
+        const side = row.side || 'Сделка';
+        const name = [row.ticker, row.name].filter(Boolean).join(' · ') || 'Инструмент';
+        const left = `${side}: ${name}`;
+        const rightParts = [];
+        if (Number.isFinite(Number(row.quantity))) {
+          rightParts.push(`x${fmtInteger(row.quantity)}`);
+        }
+        if (Number.isFinite(Number(row.amount))) {
+          rightParts.push(fmtMoneyCompactRub(row.amount));
+        }
+        if (row.date) {
+          rightParts.push(formatDateTimeRu(row.date));
+        }
+        return `<li><span>${escapeHtml(left)}</span><span>${escapeHtml(rightParts.join(' · ') || '—')}</span></li>`;
+      }).join('');
+    } else {
+      dealsEl.innerHTML =
+        '<li><span class=\"strategy-deals-empty-note\">Открытый API Т-Банка обычно не отдает историю последних сделок по стратегиям.</span><span></span></li>';
+    }
+  }
+
+  renderStrategyBenchmarkTable();
+}
+
+function calcSeriesReturnPct(points, valueKey) {
+  if (!Array.isArray(points) || points.length < 2) return null;
+  const valid = points.filter((row) => Number.isFinite(Number(row && row[valueKey])));
+  if (valid.length < 2) return null;
+  const first = Number(valid[0][valueKey]);
+  const last = Number(valid[valid.length - 1][valueKey]);
+  if (!Number.isFinite(first) || !Number.isFinite(last) || first === 0) return null;
+  return ((last / first) - 1) * 100;
+}
+
+function getStrategyPeriodLabel(period) {
+  const map = {
+    '1M': '1 мес',
+    '3M': '3 мес',
+    '6M': '6 мес',
+    '1Y': '12 мес',
+    MAX: 'За все время',
+  };
+  return map[period] || period;
+}
+
+function renderStrategyBenchmarkTable() {
+  const tableEl = document.getElementById('strategyBenchmarkTable');
+  if (!tableEl) return;
+
+  const item = getSelectedStrategyItem();
+  if (!item || !strategiesSelectedId) {
+    tableEl.innerHTML =
+      '<tbody><tr><td colspan=\"4\" style=\"text-align:center;color:var(--text-secondary);padding:10px;\">Выберите стратегию</td></tr></tbody>';
+    return;
+  }
+
+  const payload = strategyAnalyticsById.get(String(strategiesSelectedId));
+  const allPoints = payload && Array.isArray(payload.points) ? payload.points : [];
+  if (!allPoints.length) {
+    tableEl.innerHTML =
+      '<tbody><tr><td colspan=\"4\" style=\"text-align:center;color:var(--text-secondary);padding:10px;\">Данные динамики загружаются...</td></tr></tbody>';
+    return;
+  }
+
+  const periods = ['1M', '3M', '6M', '1Y', 'MAX'];
+  const rowsHtml = periods.map((period) => {
+    const periodPoints = period === 'MAX' ? allPoints : filterStrategyPointsByPeriod(allPoints, period);
+    const strategyPct = calcSeriesReturnPct(periodPoints, 'value');
+    const benchmarkPct = calcSeriesReturnPct(periodPoints, 'benchmarkValue');
+    const alphaPct =
+      Number.isFinite(Number(strategyPct)) && Number.isFinite(Number(benchmarkPct))
+        ? Number(strategyPct) - Number(benchmarkPct)
+        : null;
+    const pctCell = (value) => {
+      if (!Number.isFinite(Number(value))) return '<td class=\"num\">—</td>';
+      const cls = Number(value) >= 0 ? 'pos' : 'neg';
+      return `<td class=\"num ${cls}\">${escapeHtml(signedPercentText(value, 2))}</td>`;
+    };
+
+    return `<tr>
+      <td>${escapeHtml(getStrategyPeriodLabel(period))}</td>
+      ${pctCell(strategyPct)}
+      ${pctCell(benchmarkPct)}
+      ${pctCell(alphaPct)}
+    </tr>`;
+  }).join('');
+
+  tableEl.innerHTML = `
+    <thead>
+      <tr>
+        <th>Период</th>
+        <th class="num">Стратегия</th>
+        <th class="num">Бенчмарк</th>
+        <th class="num">Альфа</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rowsHtml}
+    </tbody>`;
 }
 
 async function loadStrategyAnalytics(strategyId, options = {}) {
@@ -2309,6 +2492,7 @@ async function loadStrategyAnalytics(strategyId, options = {}) {
     console.warn(`[strategy-analytics] ${String(error.message || error)}`);
     if (String(strategiesSelectedId) === id) {
       setStrategyChartPlaceholder('График стратегии недоступен');
+      renderStrategyBenchmarkTable();
     }
   }
 }
@@ -2343,6 +2527,7 @@ function renderSelectedStrategyChart() {
   const item = getSelectedStrategyItem();
   if (!item || !strategiesSelectedId) {
     setStrategyChartPlaceholder('Динамика портфеля');
+    renderStrategyBenchmarkTable();
     return;
   }
 
@@ -2351,12 +2536,14 @@ function renderSelectedStrategyChart() {
   const points = filterStrategyPointsByPeriod(allPoints, strategyPeriod);
   if (!points.length) {
     setStrategyChartPlaceholder(`Динамика: ${item.title || '—'} · нет данных`);
+    renderStrategyBenchmarkTable();
     return;
   }
 
   const firstValuePoint = points.find((row) => Number.isFinite(Number(row.value)));
   if (!firstValuePoint || !Number.isFinite(Number(firstValuePoint.value)) || Number(firstValuePoint.value) === 0) {
     setStrategyChartPlaceholder(`Динамика: ${item.title || '—'} · нет данных`);
+    renderStrategyBenchmarkTable();
     return;
   }
 
@@ -2385,6 +2572,7 @@ function renderSelectedStrategyChart() {
 
   if (!strategySeries.length) {
     setStrategyChartPlaceholder(`Динамика: ${item.title || '—'} · нет данных`);
+    renderStrategyBenchmarkTable();
     return;
   }
 
@@ -2475,6 +2663,7 @@ function renderSelectedStrategyChart() {
       },
     },
   });
+  renderStrategyBenchmarkTable();
 }
 
 // ============================================================

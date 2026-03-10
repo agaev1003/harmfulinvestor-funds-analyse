@@ -166,7 +166,20 @@ function parsePercent(value) {
 }
 
 function parseMoney(value) {
-  return toNumber(value);
+  const num = toNumber(value);
+  if (num == null) return null;
+  const text = normalizeLower(value);
+  let multiplier = 1;
+  if (text.includes("трлн") || text.includes("триллион")) {
+    multiplier = 1e12;
+  } else if (text.includes("млрд") || text.includes("миллиард")) {
+    multiplier = 1e9;
+  } else if (text.includes("млн") || text.includes("миллион")) {
+    multiplier = 1e6;
+  } else if (text.includes("тыс") || text.includes("тысяч")) {
+    multiplier = 1e3;
+  }
+  return num * multiplier;
 }
 
 function formatPctShort(value) {
@@ -267,6 +280,91 @@ function normalizeTopPositions(list) {
     .filter((row) => row && (row.ticker || row.name));
 }
 
+function normalizeDealSide(value) {
+  const code = normalizeLower(value);
+  if (!code) return null;
+  if (code.includes("buy") || code.includes("purchase") || code.includes("куп")) {
+    return "Покупка";
+  }
+  if (code.includes("sell") || code.includes("прод")) {
+    return "Продажа";
+  }
+  return normalizeSpace(value);
+}
+
+function normalizeRecentDeals(detail) {
+  const source = detail && typeof detail === "object" ? detail : {};
+  const candidates = [
+    source.recentDeals,
+    source.lastDeals,
+    source.latestDeals,
+    source.trades,
+    source.operations,
+    source.latestOperations,
+    source.lastOperations,
+    source.signalsHistory,
+    source.recentSignals,
+  ];
+  const rawList = candidates.find((row) => Array.isArray(row) && row.length > 0);
+  if (!Array.isArray(rawList)) return [];
+
+  const normalized = rawList
+    .map((row) => {
+      if (!row || typeof row !== "object") return null;
+      const instrument =
+        row.instrument && typeof row.instrument === "object"
+          ? row.instrument
+          : row.exchangePosition && typeof row.exchangePosition === "object"
+            ? row.exchangePosition
+            : row.position && typeof row.position === "object"
+              ? row.position
+              : {};
+      const ticker = normalizeSpace(
+        row.ticker || instrument.ticker || instrument.figi || instrument.uid
+      );
+      const name = normalizeSpace(
+        row.name || row.instrumentName || instrument.briefName || instrument.name
+      );
+      const side = normalizeDealSide(
+        row.side || row.operationType || row.type || row.action
+      );
+      const quantity = toNumber(
+        row.quantity || row.qty || row.lots || row.amountLots || row.volume
+      );
+      const price = parseMoney(row.price || row.priceText || row.priceAmount);
+      const amount = parseMoney(row.amount || row.value || row.payment || row.total);
+      const date = normalizeSpace(
+        row.time ||
+          row.date ||
+          row.createdAt ||
+          row.executedAt ||
+          row.operationDate ||
+          row.updatedAt
+      );
+      const timestamp = Number.isFinite(Date.parse(date)) ? Date.parse(date) : null;
+      if (!ticker && !name && !side && !Number.isFinite(quantity) && !date) return null;
+      return {
+        ticker: ticker || null,
+        name: name || null,
+        side: side || null,
+        quantity: Number.isFinite(quantity) ? quantity : null,
+        price: Number.isFinite(price) ? price : null,
+        amount: Number.isFinite(amount) ? amount : null,
+        date: date || null,
+        timestamp,
+      };
+    })
+    .filter(Boolean);
+
+  normalized.sort((a, b) => {
+    const aTs = Number.isFinite(Number(a.timestamp)) ? Number(a.timestamp) : -1;
+    const bTs = Number.isFinite(Number(b.timestamp)) ? Number(b.timestamp) : -1;
+    return bTs - aTs;
+  });
+
+  return normalized.slice(0, 12);
+}
+
 function buildFeesText({ brokerFeeText, managementFeeText, resultFeeText }) {
   const parts = [];
   if (managementFeeText) parts.push(`Упр: ${managementFeeText}`);
@@ -313,6 +411,15 @@ function normalizeStrategyItem(catalogItem, detailItem, tabIdsSet) {
       ? Number(catalog.relativeYield)
       : null;
 
+  const managedAmountText =
+    getCharValue(detailChar, ["tail-value", "limit-tail-value"]) ||
+    getCharValue(catalogChar, ["tail-value", "limit-tail-value"]);
+  const managedAmountValue = parseMoney(
+    getCharValue(detailChar, ["limit-tail-value"]) ||
+      getCharValue(catalogChar, ["limit-tail-value"]) ||
+      managedAmountText
+  );
+
   const brokerFeeText = getCharValue(detailChar, ["broker-fee"]);
   const managementFeeText = getCharValue(detailChar, ["management-fee"]);
   const resultFeeText = getCharValue(detailChar, ["result-fee"]);
@@ -348,6 +455,7 @@ function normalizeStrategyItem(catalogItem, detailItem, tabIdsSet) {
     .join(", ");
 
   const topPositions = normalizeTopPositions(detail.topPositions);
+  const recentDeals = normalizeRecentDeals(detail);
 
   const ownerProfile =
     (detail.owner && detail.owner.socialProfile) ||
@@ -388,6 +496,8 @@ function normalizeStrategyItem(catalogItem, detailItem, tabIdsSet) {
     allTimeReturnPct: Number.isFinite(allTimeReturnPct) ? allTimeReturnPct : null,
     allTimeReturnText: allTimeReturnText || null,
     return12mPct: Number.isFinite(return12mPct) ? return12mPct : null,
+    managedAmountValue: Number.isFinite(managedAmountValue) ? managedAmountValue : null,
+    managedAmountText: managedAmountText || null,
     expectedReturnPct: Number.isFinite(expectedReturnPct) ? expectedReturnPct : null,
     expectedReturnText: expectedText || null,
     minAmountValue: Number.isFinite(minAmountValue) ? minAmountValue : null,
@@ -405,6 +515,7 @@ function normalizeStrategyItem(catalogItem, detailItem, tabIdsSet) {
     topCompaniesText: topCompaniesText || null,
     portfolio,
     topPositions,
+    recentDeals,
     tabs: Array.from(tabIdsSet || []).sort(),
     tags: tags
       .map((tag) => {
