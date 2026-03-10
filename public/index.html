@@ -1245,11 +1245,6 @@ body {
         <div class="strategy-desc" id="strategyDescription">Здесь появится описание стратегии и ключевые параметры.</div>
       </div>
 
-      <div class="chart-card strategy-chart-card">
-        <div class="chart-card-title" id="strategyChartTitle">Динамика портфеля</div>
-        <div class="chart-canvas-wrap"><canvas id="strategyValueChart"></canvas></div>
-      </div>
-
       <div class="summary-table-card">
         <h3>Сравнение с бенчмарком</h3>
         <table class="strategy-benchmark-table" id="strategyBenchmarkTable">
@@ -1285,6 +1280,11 @@ body {
             </ul>
           </div>
         </div>
+      </div>
+
+      <div class="chart-card strategy-chart-card">
+        <div class="chart-card-title" id="strategyChartTitle">Динамика портфеля</div>
+        <div class="chart-canvas-wrap"><canvas id="strategyValueChart"></canvas></div>
       </div>
     </div>
   </div>
@@ -2556,17 +2556,21 @@ function renderSelectedStrategyChart() {
 
   const strategySeries = points.map((row) => {
     const value = Number(row.value);
-    const x = row.date || row.time || '';
-    if (!Number.isFinite(value) || !x) return null;
-    return { x, y: ((value / baseValue) - 1) * 100 };
+    const xTs = Number.isFinite(Number(row.timestamp))
+      ? Number(row.timestamp)
+      : Date.parse(String(row.date || row.time || ''));
+    if (!Number.isFinite(value) || !Number.isFinite(xTs)) return null;
+    return { x: xTs, y: ((value / baseValue) - 1) * 100 };
   }).filter(Boolean);
 
   const benchmarkSeries = (baseBenchmark != null && baseBenchmark !== 0)
     ? points.map((row) => {
       const value = Number(row.benchmarkValue);
-      const x = row.date || row.time || '';
-      if (!Number.isFinite(value) || !x) return null;
-      return { x, y: ((value / baseBenchmark) - 1) * 100 };
+      const xTs = Number.isFinite(Number(row.timestamp))
+        ? Number(row.timestamp)
+        : Date.parse(String(row.date || row.time || ''));
+      if (!Number.isFinite(value) || !Number.isFinite(xTs)) return null;
+      return { x: xTs, y: ((value / baseBenchmark) - 1) * 100 };
     }).filter(Boolean)
     : [];
 
