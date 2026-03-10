@@ -130,6 +130,18 @@ body {
   border-bottom-color: var(--accent);
   font-weight: 600;
 }
+.tab-btn.strategies-tab {
+  color: #f1d15a;
+  font-weight: 600;
+}
+.tab-btn.strategies-tab:hover {
+  color: #ffe27b;
+}
+.tab-btn.strategies-tab.active {
+  color: #ffd84a;
+  border-bottom-color: #ffd84a;
+  text-shadow: 0 0 10px rgba(255, 216, 74, 0.25);
+}
 /* ============================================================
    SHARED CONTROLS
    ============================================================ */
@@ -943,9 +955,9 @@ body {
   <button class="tab-btn active" data-tab="returns">Доходность фондов</button>
   <button class="tab-btn" data-tab="market">Рынок</button>
   <button class="tab-btn" data-tab="mc">УК</button>
-  <button class="tab-btn" data-tab="strategies">Автоследование</button>
   <button class="tab-btn" data-tab="fund">Фонды</button>
   <button class="tab-btn" data-tab="composition">Подборка фондов, состав</button>
+  <button class="tab-btn strategies-tab" data-tab="strategies">Автоследование</button>
   <div class="top-right-status">
     <span class="update-pill" id="globalUpdateStatus">Обновление: --</span>
   </div>
