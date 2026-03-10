@@ -2,6 +2,7 @@ const express = require("express");
 const compression = require("compression");
 const path = require("path");
 const provider = require("./data-provider");
+const strategiesProvider = require("./strategies-provider");
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -11,6 +12,12 @@ const NAV_API_CACHE_TTL_MS = Number(process.env.NAV_API_CACHE_TTL_MS || 120_000)
 const STATUS_API_CACHE_TTL_MS = Number(process.env.STATUS_API_CACHE_TTL_MS || 15_000);
 const COMPOSITION_API_CACHE_TTL_MS = Number(
   process.env.COMPOSITION_API_CACHE_TTL_MS || 20_000
+);
+const STRATEGY_API_CACHE_TTL_MS = Number(
+  process.env.STRATEGY_API_CACHE_TTL_MS || 30_000
+);
+const STRATEGY_ANALYTICS_API_CACHE_TTL_MS = Number(
+  process.env.STRATEGY_ANALYTICS_API_CACHE_TTL_MS || 90_000
 );
 const ACCESS_LINK_TOKEN = String(process.env.ACCESS_LINK_TOKEN || "").trim();
 const ACCESS_COOKIE_NAME = String(process.env.ACCESS_COOKIE_NAME || "fi_access").trim();
@@ -371,6 +378,74 @@ app.get("/api/status", async (req, res) => {
   }
 });
 
+app.get("/api/strategies", async (req, res) => {
+  try {
+    const forceRefresh =
+      req.query.refresh != null &&
+      String(req.query.refresh).toLowerCase() !== "0" &&
+      String(req.query.refresh).toLowerCase() !== "false";
+
+    const cacheKey = getApiCacheKey(req);
+    if (!forceRefresh) {
+      const cached = getCachedJson(cacheKey);
+      if (cached) {
+        sendJson(res, cached, "public, max-age=20");
+        return;
+      }
+    }
+
+    const payload = await strategiesProvider.getStrategiesPayload({ forceRefresh });
+    if (forceRefresh) invalidateApiCacheByPrefix("/api/strategies");
+    setCachedJson(forceRefresh ? "/api/strategies" : cacheKey, payload, STRATEGY_API_CACHE_TTL_MS);
+    sendJson(res, payload, forceRefresh ? "public, max-age=5" : "public, max-age=20");
+  } catch (error) {
+    res.status(500).json({
+      error: "Не удалось загрузить стратегии автоследования",
+      details: String(error.message || error),
+    });
+  }
+});
+
+app.get("/api/strategies/:id/analytics", async (req, res) => {
+  try {
+    const strategyId = String(req.params.id || "").trim();
+    if (!strategyId) {
+      res.status(400).json({ error: "Некорректный id стратегии" });
+      return;
+    }
+
+    const forceRefresh =
+      req.query.refresh != null &&
+      String(req.query.refresh).toLowerCase() !== "0" &&
+      String(req.query.refresh).toLowerCase() !== "false";
+
+    const cacheKey = getApiCacheKey(req);
+    if (!forceRefresh) {
+      const cached = getCachedJson(cacheKey);
+      if (cached) {
+        sendJson(res, cached, "public, max-age=45");
+        return;
+      }
+    }
+
+    const payload = await strategiesProvider.getStrategyAnalytics(strategyId, {
+      forceRefresh,
+    });
+    if (forceRefresh) invalidateApiCacheByPrefix(req.path);
+    setCachedJson(
+      forceRefresh ? req.path : cacheKey,
+      payload,
+      STRATEGY_ANALYTICS_API_CACHE_TTL_MS
+    );
+    sendJson(res, payload, forceRefresh ? "public, max-age=10" : "public, max-age=45");
+  } catch (error) {
+    res.status(500).json({
+      error: "Не удалось загрузить график стратегии",
+      details: String(error.message || error),
+    });
+  }
+});
+
 app.use(
   express.static(path.join(__dirname, "public"), {
     etag: true,
@@ -414,6 +489,13 @@ function startServer(port = PORT, host = HOST) {
         .catch((error) =>
           console.warn(
             `[warmup] compositions preload failed: ${String(error.message || error)}`
+          )
+        );
+      strategiesProvider
+        .getStrategiesPayload({ forceRefresh: false })
+        .catch((error) =>
+          console.warn(
+            `[warmup] strategies preload failed: ${String(error.message || error)}`
           )
         );
     }, 300);

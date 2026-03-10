@@ -348,6 +348,135 @@ body {
 }
 
 /* ============================================================
+   TAB 4: STRATEGIES
+   ============================================================ */
+.strategies-wrap {
+  display: grid;
+  grid-template-columns: minmax(520px, 1.45fr) minmax(320px, 1fr);
+  gap: 10px;
+  padding: 10px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.strategies-table-wrap {
+  min-height: 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+.strategies-table-wrap table {
+  border-collapse: collapse;
+}
+.strategies-table .name-cell {
+  min-width: 260px;
+  max-width: 360px;
+}
+.strategies-table .strategy-name {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.strategies-table .strategy-author {
+  color: var(--text-secondary);
+  font-size: 11px;
+  margin-top: 2px;
+}
+.strategies-table .fees-cell,
+.strategies-table .portfolio-cell {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.strategies-table tbody tr.selected {
+  box-shadow: inset 0 0 0 1px rgba(255, 18, 61, 0.55);
+  background: rgba(255, 18, 61, 0.1);
+}
+.strategy-summary {
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.strategies-side {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.strategy-panel {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.strategy-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.2;
+  margin-bottom: 4px;
+}
+.strategy-sub {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+.strategy-sub a {
+  color: var(--accent);
+}
+.strategy-meta-grid {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr);
+  gap: 6px 12px;
+  margin-bottom: 8px;
+}
+.strategy-meta-item {
+  font-size: 12px;
+}
+.strategy-meta-item .k {
+  color: var(--text-secondary);
+  display: block;
+  margin-bottom: 2px;
+}
+.strategy-meta-item .v {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.strategy-desc {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+  max-height: 98px;
+  overflow: auto;
+}
+.strategy-chart-card {
+  height: 300px;
+}
+.strategy-portfolio-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 220px;
+  overflow: auto;
+}
+.strategy-portfolio-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 3px 0;
+  border-bottom: 1px solid var(--soft-divider);
+}
+.strategy-portfolio-list li:last-child {
+  border-bottom: none;
+}
+
+/* ============================================================
    TABS 2-3: MARKET / MC CHARTS & TABLES
    ============================================================ */
 .section-block {
@@ -465,7 +594,7 @@ body {
 .summary-tbl .neg { color: var(--red); }
 
 /* ============================================================
-   TAB 4: INDIVIDUAL FUND
+   TAB 5: INDIVIDUAL FUND
    ============================================================ */
 .fund-info-bar {
   padding: 6px 16px;
@@ -511,7 +640,7 @@ body {
 .fund-chart-container { width: 100%; height: 100%; }
 
 /* ============================================================
-   TAB 5: COMPOSITION
+   TAB 6: COMPOSITION
    ============================================================ */
 .composition-wrap {
   display: flex;
@@ -763,6 +892,13 @@ body {
     margin-left: 0;
     padding-left: 0;
   }
+  .strategies-wrap {
+    grid-template-columns: 1fr;
+    overflow: auto;
+  }
+  .strategies-table-wrap {
+    max-height: 52vh;
+  }
 }
 
 @media (max-width: 760px) {
@@ -807,6 +943,7 @@ body {
   <button class="tab-btn active" data-tab="returns">Доходность фондов</button>
   <button class="tab-btn" data-tab="market">Рынок</button>
   <button class="tab-btn" data-tab="mc">УК</button>
+  <button class="tab-btn" data-tab="strategies">Автоследование</button>
   <button class="tab-btn" data-tab="fund">Фонды</button>
   <button class="tab-btn" data-tab="composition">Подборка фондов, состав</button>
   <div class="top-right-status">
@@ -1019,7 +1156,70 @@ body {
 </div>
 
 <!-- ============================================================
-     TAB 4: ФОНДЫ (individual fund)
+     TAB 4: СТРАТЕГИИ АВТОСЛЕДОВАНИЯ
+     ============================================================ -->
+<div class="tab-content" id="tab-strategies">
+  <div class="controls-bar">
+    <div class="period-btns" id="strategyPeriods">
+      <button data-period="1M">1M</button>
+      <button data-period="3M">3M</button>
+      <button data-period="6M">6M</button>
+      <button data-period="1Y" class="active">1Y</button>
+      <button data-period="MAX">MAX</button>
+    </div>
+    <button class="filter-btn" id="strategyReloadBtn">Обновить список</button>
+  </div>
+
+  <div class="strategies-wrap">
+    <div class="strategies-table-wrap">
+      <table class="returns-table strategies-table" id="strategiesTable">
+        <thead>
+          <tr>
+            <th data-col="title">Стратегия</th>
+            <th data-col="clients" class="num">Клиенты</th>
+            <th data-col="allTimeReturnPct" class="num sorted-desc">За все время</th>
+            <th data-col="return12mPct" class="num">12м</th>
+            <th data-col="expectedReturnPct" class="num">Прогноз</th>
+            <th data-col="minAmountValue" class="num">Мин. сумма</th>
+            <th data-col="riskLabel">Риск</th>
+            <th data-col="feesText">Комиссии</th>
+            <th data-col="topCompaniesText">Портфель (топ)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td colspan="9" style="text-align:center;color:var(--text-secondary);padding:16px;">Откройте вкладку для загрузки стратегий</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="strategy-summary" id="strategySummary">Стратегии не загружены</div>
+    </div>
+
+    <div class="strategies-side">
+      <div class="strategy-panel">
+        <div class="strategy-title" id="strategyTitle">Выберите стратегию</div>
+        <div class="strategy-sub" id="strategySub">Выберите строку в таблице, чтобы открыть детали</div>
+        <div class="strategy-meta-grid" id="strategyMetaGrid"></div>
+        <div class="strategy-desc" id="strategyDescription">Здесь появится описание стратегии и ключевые параметры.</div>
+      </div>
+
+      <div class="chart-card strategy-chart-card">
+        <div class="chart-card-title" id="strategyChartTitle">Динамика портфеля</div>
+        <div class="chart-canvas-wrap"><canvas id="strategyValueChart"></canvas></div>
+      </div>
+
+      <div class="summary-table-card">
+        <h3>Состав портфеля (топ-10)</h3>
+        <ul class="strategy-portfolio-list" id="strategyPortfolioList">
+          <li><span>Нет данных</span><span></span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     TAB 5: ФОНДЫ (individual fund)
      ============================================================ -->
 <div class="tab-content" id="tab-fund">
   <div class="controls-bar">
@@ -1072,7 +1272,7 @@ body {
 </div>
 
 <!-- ============================================================
-     TAB 5: СОСТАВ ФОНДОВ
+     TAB 6: СОСТАВ ФОНДОВ
      ============================================================ -->
 <div class="tab-content" id="tab-composition">
   <div class="controls-bar">
@@ -1134,6 +1334,18 @@ let mcFundType = ['открытый', 'биржевой'];
 let mcCharts = {};
 
 // Tab 4 state
+let strategiesData = [];
+let strategiesMeta = null;
+let strategiesLoaded = false;
+let strategiesSortCol = 'allTimeReturnPct';
+let strategiesSortDir = 'desc';
+let strategiesSelectedId = '';
+let strategyPeriod = '1Y';
+let strategyChart = null;
+let strategyAnalyticsById = new Map();
+let strategyAutoRefreshTimer = null;
+
+// Tab 5 state
 let fundCharts = {};
 let fundSeries = {};
 let currentFund = null;
@@ -1154,7 +1366,7 @@ const NON_FUND_GROUP_LABELS = new Set([
   'денежный',
 ]);
 
-// Tab 5 state
+// Tab 6 state
 let compositionData = [];
 let compositionLoaded = false;
 let compositionQuery = '';
@@ -1219,10 +1431,12 @@ async function init() {
   initSummaryFundLinks();
   await refreshGlobalStatus();
   startStatusPolling();
+  startStrategyAutoRefresh();
   await loadFundsList();
   initTab1();
   initTab2Filters();
   initTab3Filters();
+  initTabStrategies();
   initTab4();
   initTab5();
   loadReturnsData();
@@ -1259,6 +1473,7 @@ function setupTabs() {
 function onTabActivated(tabId) {
   if (tabId === 'market' && !marketData) loadMarketData();
   if (tabId === 'mc' && !mcDetailData) loadMCDetailData();
+  if (tabId === 'strategies' && !strategiesLoaded) loadStrategiesData();
   if (tabId === 'fund') resizeFundCharts();
   if (tabId === 'composition' && !compositionLoaded) loadCompositionData();
 }
@@ -1268,6 +1483,15 @@ function startStatusPolling() {
   statusPollTimer = setInterval(() => {
     refreshGlobalStatus();
   }, 60_000);
+}
+
+function startStrategyAutoRefresh() {
+  if (strategyAutoRefreshTimer) clearInterval(strategyAutoRefreshTimer);
+  strategyAutoRefreshTimer = setInterval(() => {
+    const tab = document.getElementById('tab-strategies');
+    if (!tab || !tab.classList.contains('active')) return;
+    loadStrategiesData(false, { silent: true, keepSelection: true });
+  }, 5 * 60_000);
 }
 
 async function refreshGlobalStatus() {
@@ -1759,7 +1983,490 @@ function renderMCCharts() {
 }
 
 // ============================================================
-// TAB 4: ФОНДЫ (individual fund)
+// TAB 4: СТРАТЕГИИ АВТОСЛЕДОВАНИЯ
+// ============================================================
+const STRATEGY_NUMERIC_COLS = new Set([
+  'clients',
+  'allTimeReturnPct',
+  'return12mPct',
+  'expectedReturnPct',
+  'minAmountValue',
+]);
+
+function initTabStrategies() {
+  document.querySelectorAll('#strategiesTable th').forEach((th) => {
+    th.addEventListener('click', () => {
+      const col = th.dataset.col;
+      if (!col) return;
+      if (strategiesSortCol === col) {
+        strategiesSortDir = strategiesSortDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        strategiesSortCol = col;
+        strategiesSortDir = STRATEGY_NUMERIC_COLS.has(col) ? 'desc' : 'asc';
+      }
+      renderStrategiesTable();
+    });
+  });
+
+  const tbody = document.querySelector('#strategiesTable tbody');
+  tbody.addEventListener('click', (event) => {
+    const row = event.target.closest('tr[data-id]');
+    if (!row) return;
+    selectStrategy(row.dataset.id);
+  });
+
+  document.getElementById('strategyPeriods').addEventListener('click', (event) => {
+    const btn = event.target.closest('button');
+    if (!btn) return;
+    document.querySelectorAll('#strategyPeriods button').forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    strategyPeriod = btn.dataset.period || '1Y';
+    renderSelectedStrategyChart();
+  });
+
+  document.getElementById('strategyReloadBtn').addEventListener('click', () => {
+    loadStrategiesData(true, { keepSelection: true });
+  });
+}
+
+async function loadStrategiesData(forceRefresh = false, options = {}) {
+  const silent = Boolean(options && options.silent);
+  const keepSelection = !options || options.keepSelection !== false;
+  const summaryEl = document.getElementById('strategySummary');
+  const tbody = document.querySelector('#strategiesTable tbody');
+
+  if (!silent && summaryEl) {
+    summaryEl.textContent = forceRefresh ? 'Обновляем список стратегий...' : 'Загружаем список стратегий...';
+  }
+  if (!silent && tbody && !strategiesLoaded) {
+    tbody.innerHTML =
+      '<tr><td colspan=\"9\" style=\"text-align:center;color:var(--text-secondary);padding:16px;\">Загрузка стратегий...</td></tr>';
+  }
+
+  try {
+    const url = forceRefresh
+      ? `/api/strategies?refresh=${Date.now()}`
+      : '/api/strategies';
+    const payload = await fetchJsonChecked(url, 'Не удалось загрузить стратегии автоследования');
+    const rows = Array.isArray(payload)
+      ? payload
+      : (payload && Array.isArray(payload.items) ? payload.items : []);
+
+    strategiesData = rows;
+    strategiesMeta = payload && typeof payload === 'object' ? payload : null;
+    strategiesLoaded = true;
+
+    if (
+      !keepSelection ||
+      !strategiesSelectedId ||
+      !strategiesData.some((row) => String(row.id) === String(strategiesSelectedId))
+    ) {
+      strategiesSelectedId = strategiesData.length ? String(strategiesData[0].id) : '';
+    }
+
+    renderStrategiesTable();
+    renderSelectedStrategyInfo();
+
+    if (strategiesSelectedId) {
+      await loadStrategyAnalytics(strategiesSelectedId, {
+        forceRefresh,
+        silent: true,
+      });
+    } else {
+      setStrategyChartPlaceholder('Динамика портфеля');
+    }
+  } catch (error) {
+    console.warn(`[strategies] ${String(error.message || error)}`);
+    strategiesLoaded = false;
+    if (tbody) {
+      tbody.innerHTML = `<tr><td colspan=\"9\" style=\"text-align:center;color:var(--red);padding:16px;\">${escapeHtml(
+        String(error.message || error)
+      )}</td></tr>`;
+    }
+    if (summaryEl) summaryEl.textContent = 'Стратегии не загружены';
+    setStrategyChartPlaceholder('Динамика портфеля');
+  }
+}
+
+function compareStrategiesRows(a, b, col, dir) {
+  const direction = dir === 'asc' ? 1 : -1;
+  if (STRATEGY_NUMERIC_COLS.has(col)) {
+    const aNumRaw = a && Number.isFinite(Number(a[col])) ? Number(a[col]) : null;
+    const bNumRaw = b && Number.isFinite(Number(b[col])) ? Number(b[col]) : null;
+    if (aNumRaw == null && bNumRaw == null) return 0;
+    if (aNumRaw == null) return 1;
+    if (bNumRaw == null) return -1;
+    if (aNumRaw === bNumRaw) return 0;
+    return direction * (aNumRaw - bNumRaw);
+  }
+
+  const aText = String((a && a[col]) || '');
+  const bText = String((b && b[col]) || '');
+  return direction * aText.localeCompare(bText, 'ru');
+}
+
+function renderStrategyPctCell(value) {
+  if (!Number.isFinite(Number(value))) return '<td class=\"num\">—</td>';
+  const num = Number(value);
+  const cls = num >= 0 ? 'pos' : 'neg';
+  const sign = num >= 0 ? '+' : '';
+  return `<td class=\"num ${cls}\">${sign}${num.toFixed(1)}%</td>`;
+}
+
+function fmtInteger(value) {
+  if (!Number.isFinite(Number(value))) return '—';
+  return Math.round(Number(value)).toLocaleString('ru-RU');
+}
+
+function signedPercentText(value, digits = 1) {
+  if (!Number.isFinite(Number(value))) return '—';
+  const num = Number(value);
+  const sign = num >= 0 ? '+' : '';
+  return `${sign}${num.toLocaleString('ru-RU', {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  })}%`;
+}
+
+function renderStrategiesTable() {
+  const rows = Array.isArray(strategiesData) ? strategiesData.slice() : [];
+  rows.sort((a, b) => compareStrategiesRows(a, b, strategiesSortCol, strategiesSortDir));
+
+  document.querySelectorAll('#strategiesTable th').forEach((th) => {
+    th.classList.remove('sorted-asc', 'sorted-desc');
+    if (th.dataset.col === strategiesSortCol) th.classList.add(`sorted-${strategiesSortDir}`);
+  });
+
+  const tbody = document.querySelector('#strategiesTable tbody');
+  if (!tbody) return;
+  if (!rows.length) {
+    tbody.innerHTML =
+      '<tr><td colspan=\"9\" style=\"text-align:center;color:var(--text-secondary);padding:16px;\">Нет доступных стратегий</td></tr>';
+  } else {
+    tbody.innerHTML = rows.map((row) => {
+      const id = String(row.id || '');
+      const selectedClass = id === String(strategiesSelectedId) ? ' selected' : '';
+      const minAmountText = row.minAmountText
+        ? String(row.minAmountText)
+        : Number.isFinite(Number(row.minAmountValue))
+          ? `${Math.round(Number(row.minAmountValue)).toLocaleString('ru-RU')} ₽`
+          : '—';
+      const feesText = row.feesText || '—';
+      const portfolioText = row.topCompaniesText || '—';
+      return `<tr data-id=\"${escapeAttr(id)}\" class=\"${selectedClass.trim()}\">
+        <td class=\"name-cell\" title=\"${escapeAttr(row.title || '')}\">
+          <div class=\"strategy-name\">${escapeHtml(row.title || '—')}</div>
+          <div class=\"strategy-author\">${escapeHtml(row.ownerNickname || 'Автор не указан')}</div>
+        </td>
+        <td class=\"num\">${escapeHtml(fmtInteger(row.clients))}</td>
+        ${renderStrategyPctCell(row.allTimeReturnPct)}
+        ${renderStrategyPctCell(row.return12mPct)}
+        ${renderStrategyPctCell(row.expectedReturnPct)}
+        <td class=\"num\">${escapeHtml(minAmountText)}</td>
+        <td>${escapeHtml(row.riskLabel || '—')}</td>
+        <td class=\"fees-cell\" title=\"${escapeAttr(feesText)}\">${escapeHtml(feesText)}</td>
+        <td class=\"portfolio-cell\" title=\"${escapeAttr(portfolioText)}\">${escapeHtml(portfolioText)}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  const summaryEl = document.getElementById('strategySummary');
+  if (summaryEl) {
+    const updatedAt = strategiesMeta && strategiesMeta.generatedAt
+      ? formatDateTimeRu(strategiesMeta.generatedAt)
+      : '--';
+    const stale = Boolean(strategiesMeta && strategiesMeta.stale);
+    const refreshing = Boolean(strategiesMeta && strategiesMeta.refreshing);
+    const hasError = Boolean(strategiesMeta && strategiesMeta.lastError);
+    summaryEl.textContent =
+      `Стратегий: ${rows.length} · Обновлено: ${updatedAt}` +
+      (refreshing ? ' · обновляем' : '') +
+      (stale ? ' · кэш устарел, идет фоновое обновление' : '') +
+      (hasError ? ' · были ошибки обновления' : '');
+  }
+}
+
+function getSelectedStrategyItem() {
+  if (!strategiesSelectedId) return null;
+  return strategiesData.find((row) => String(row.id) === String(strategiesSelectedId)) || null;
+}
+
+function selectStrategy(strategyId) {
+  const id = String(strategyId || '').trim();
+  if (!id) return;
+  strategiesSelectedId = id;
+  renderStrategiesTable();
+  renderSelectedStrategyInfo();
+
+  if (strategyAnalyticsById.has(id)) {
+    renderSelectedStrategyChart();
+  } else {
+    setStrategyChartPlaceholder('Загружаем график стратегии...');
+    loadStrategyAnalytics(id, { silent: true });
+  }
+}
+
+function renderSelectedStrategyInfo() {
+  const titleEl = document.getElementById('strategyTitle');
+  const subEl = document.getElementById('strategySub');
+  const metaEl = document.getElementById('strategyMetaGrid');
+  const descEl = document.getElementById('strategyDescription');
+  const listEl = document.getElementById('strategyPortfolioList');
+  const item = getSelectedStrategyItem();
+
+  if (!item) {
+    titleEl.textContent = 'Выберите стратегию';
+    subEl.textContent = 'Выберите строку в таблице, чтобы открыть детали';
+    metaEl.innerHTML = '';
+    descEl.textContent = 'Здесь появится описание стратегии и ключевые параметры.';
+    listEl.innerHTML = '<li><span>Нет данных</span><span></span></li>';
+    return;
+  }
+
+  titleEl.textContent = item.title || 'Без названия';
+  const author = escapeHtml(item.ownerNickname || 'Автор не указан');
+  const linkHtml = item.url
+    ? ` · <a href=\"${escapeAttr(item.url)}\" target=\"_blank\" rel=\"noopener\">Открыть в Т-Банке</a>`
+    : '';
+  subEl.innerHTML = `Автор: ${author}${linkHtml}`;
+
+  const minAmountText = item.minAmountText
+    ? String(item.minAmountText)
+    : Number.isFinite(Number(item.minAmountValue))
+      ? `${Math.round(Number(item.minAmountValue)).toLocaleString('ru-RU')} ₽`
+      : '—';
+
+  const metaRows = [
+    { label: 'Доходность, все время', value: signedPercentText(item.allTimeReturnPct, 1) },
+    { label: 'Доходность, 12м', value: signedPercentText(item.return12mPct, 1) },
+    { label: 'Прогноз', value: signedPercentText(item.expectedReturnPct, 1) },
+    { label: 'Подписчиков', value: fmtInteger(item.clients) },
+    { label: 'Мин. сумма', value: minAmountText },
+    { label: 'Риск', value: item.riskLabel || '—' },
+    { label: 'Комиссии', value: item.feesText || '—' },
+    { label: 'Макс. просадка', value: signedPercentText(item.maxDrawdownPct, 1) },
+  ];
+
+  metaEl.innerHTML = metaRows
+    .map((row) => `<div class=\"strategy-meta-item\"><span class=\"k\">${escapeHtml(row.label)}</span><span class=\"v\">${escapeHtml(row.value)}</span></div>`)
+    .join('');
+
+  descEl.textContent = item.description || item.shortDescription || 'Описание недоступно.';
+
+  const companies = item.portfolio && Array.isArray(item.portfolio.companies)
+    ? item.portfolio.companies
+    : [];
+  if (companies.length > 0) {
+    listEl.innerHTML = companies.slice(0, 10).map((row) => {
+      const pct = fmtPercent(row.percent);
+      return `<li><span>${escapeHtml(row.title || '—')}</span><span>${escapeHtml(pct)}</span></li>`;
+    }).join('');
+  } else if (Array.isArray(item.topPositions) && item.topPositions.length > 0) {
+    listEl.innerHTML = item.topPositions.slice(0, 10).map((row) => {
+      const left = [row.ticker, row.name].filter(Boolean).join(' · ') || '—';
+      const right = Number.isFinite(Number(row.signalsCount))
+        ? `${fmtInteger(row.signalsCount)} сигналов`
+        : '';
+      return `<li><span>${escapeHtml(left)}</span><span>${escapeHtml(right)}</span></li>`;
+    }).join('');
+  } else {
+    listEl.innerHTML = '<li><span>Нет данных по составу</span><span></span></li>';
+  }
+}
+
+async function loadStrategyAnalytics(strategyId, options = {}) {
+  const id = String(strategyId || '').trim();
+  if (!id) return;
+
+  const forceRefresh = Boolean(options && options.forceRefresh);
+  const silent = Boolean(options && options.silent);
+  if (!silent && String(strategiesSelectedId) === id) {
+    setStrategyChartPlaceholder('Загружаем график стратегии...');
+  }
+
+  try {
+    const url = forceRefresh
+      ? `/api/strategies/${encodeURIComponent(id)}/analytics?refresh=${Date.now()}`
+      : `/api/strategies/${encodeURIComponent(id)}/analytics`;
+    const payload = await fetchJsonChecked(url, 'Не удалось загрузить график стратегии');
+    const prepared = payload && typeof payload === 'object' ? payload : { points: [] };
+    if (!Array.isArray(prepared.points)) prepared.points = [];
+    strategyAnalyticsById.set(id, prepared);
+    if (String(strategiesSelectedId) === id) renderSelectedStrategyChart();
+  } catch (error) {
+    console.warn(`[strategy-analytics] ${String(error.message || error)}`);
+    if (String(strategiesSelectedId) === id) {
+      setStrategyChartPlaceholder('График стратегии недоступен');
+    }
+  }
+}
+
+function filterStrategyPointsByPeriod(points, period) {
+  if (!Array.isArray(points) || points.length === 0) return [];
+  if (period === 'MAX') return points.slice();
+
+  const { from } = getPeriodDates(period);
+  const fromTs = Date.parse(String(from || ''));
+  if (!Number.isFinite(fromTs)) return points.slice();
+
+  const filtered = points.filter((row) => {
+    const ts = Number.isFinite(Number(row && row.timestamp))
+      ? Number(row.timestamp)
+      : Date.parse(String(row && row.date ? row.date : ''));
+    return Number.isFinite(ts) ? ts >= fromTs : false;
+  });
+  return filtered.length ? filtered : points.slice();
+}
+
+function setStrategyChartPlaceholder(text) {
+  const titleEl = document.getElementById('strategyChartTitle');
+  if (titleEl) titleEl.textContent = text || 'Динамика портфеля';
+  if (strategyChart) {
+    strategyChart.destroy();
+    strategyChart = null;
+  }
+}
+
+function renderSelectedStrategyChart() {
+  const item = getSelectedStrategyItem();
+  if (!item || !strategiesSelectedId) {
+    setStrategyChartPlaceholder('Динамика портфеля');
+    return;
+  }
+
+  const payload = strategyAnalyticsById.get(String(strategiesSelectedId));
+  const allPoints = payload && Array.isArray(payload.points) ? payload.points : [];
+  const points = filterStrategyPointsByPeriod(allPoints, strategyPeriod);
+  if (!points.length) {
+    setStrategyChartPlaceholder(`Динамика: ${item.title || '—'} · нет данных`);
+    return;
+  }
+
+  const firstValuePoint = points.find((row) => Number.isFinite(Number(row.value)));
+  if (!firstValuePoint || !Number.isFinite(Number(firstValuePoint.value)) || Number(firstValuePoint.value) === 0) {
+    setStrategyChartPlaceholder(`Динамика: ${item.title || '—'} · нет данных`);
+    return;
+  }
+
+  const baseValue = Number(firstValuePoint.value);
+  const firstBenchmarkPoint = points.find((row) => Number.isFinite(Number(row.benchmarkValue)));
+  const baseBenchmark =
+    firstBenchmarkPoint && Number.isFinite(Number(firstBenchmarkPoint.benchmarkValue))
+      ? Number(firstBenchmarkPoint.benchmarkValue)
+      : null;
+
+  const strategySeries = points.map((row) => {
+    const value = Number(row.value);
+    const x = row.date || row.time || '';
+    if (!Number.isFinite(value) || !x) return null;
+    return { x, y: ((value / baseValue) - 1) * 100 };
+  }).filter(Boolean);
+
+  const benchmarkSeries = (baseBenchmark != null && baseBenchmark !== 0)
+    ? points.map((row) => {
+      const value = Number(row.benchmarkValue);
+      const x = row.date || row.time || '';
+      if (!Number.isFinite(value) || !x) return null;
+      return { x, y: ((value / baseBenchmark) - 1) * 100 };
+    }).filter(Boolean)
+    : [];
+
+  if (!strategySeries.length) {
+    setStrategyChartPlaceholder(`Динамика: ${item.title || '—'} · нет данных`);
+    return;
+  }
+
+  const lastValue = strategySeries[strategySeries.length - 1].y;
+  const perfText = signedPercentText(lastValue, 2);
+  const titleEl = document.getElementById('strategyChartTitle');
+  if (titleEl) {
+    titleEl.textContent = `Динамика (${strategyPeriod}) от начала периода: ${perfText}`;
+  }
+
+  if (strategyChart) strategyChart.destroy();
+  const canvas = document.getElementById('strategyValueChart');
+  if (!canvas) return;
+
+  const gridColor = cssVar('--grid-color', 'rgba(255, 18, 61, 0.2)');
+  const textColor = cssVar('--text-secondary', '#9a9aaa');
+  const strategyColor = cssVar('--accent', '#ff123d');
+  const benchmarkColor = '#7d8ba8';
+
+  const datasets = [
+    {
+      label: item.title || 'Стратегия',
+      data: strategySeries,
+      borderColor: strategyColor,
+      backgroundColor: hexToRgba(strategyColor, 0.12),
+      borderWidth: 2,
+      pointRadius: 0,
+      pointHoverRadius: 3,
+      tension: 0.15,
+    },
+  ];
+
+  if (benchmarkSeries.length) {
+    datasets.push({
+      label: 'Бенчмарк',
+      data: benchmarkSeries,
+      borderColor: benchmarkColor,
+      borderDash: [5, 4],
+      borderWidth: 1.5,
+      pointRadius: 0,
+      tension: 0.15,
+    });
+  }
+
+  strategyChart = new Chart(canvas, {
+    type: 'line',
+    data: { datasets },
+    options: {
+      parsing: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: {
+            color: textColor,
+            usePointStyle: true,
+            pointStyle: 'line',
+            boxWidth: 16,
+            padding: 10,
+            font: { size: 11 },
+          },
+        },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `${ctx.dataset.label}: ${signedPercentText(ctx.parsed.y, 2)}`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          type: 'time',
+          time: {
+            unit: strategyPeriod === '1M' ? 'day' : strategyPeriod === '3M' ? 'week' : 'month',
+          },
+          grid: { color: gridColor },
+          ticks: { color: textColor, maxTicksLimit: 8, font: { size: 10 } },
+        },
+        y: {
+          grid: { color: gridColor },
+          ticks: {
+            color: textColor,
+            font: { size: 10 },
+            callback: (value) => `${Number(value).toFixed(0)}%`,
+          },
+        },
+      },
+    },
+  });
+}
+
+// ============================================================
+// TAB 5: ФОНДЫ (individual fund)
 // ============================================================
 const FUND_CHART_KEYS = ['nav', 'aum', 'shares', 'flows'];
 
@@ -1991,7 +2698,7 @@ function updateFundCrosshair(param) {
 }
 
 // ============================================================
-// TAB 5: СОСТАВ ФОНДОВ
+// TAB 6: СОСТАВ ФОНДОВ
 // ============================================================
 function initTab5() {
   const input = document.getElementById('compositionSearchInput');
