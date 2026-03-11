@@ -24,6 +24,9 @@ const EXPOSE_ERROR_DETAILS =
   !["0", "false", "no"].includes(
     String(process.env.EXPOSE_ERROR_DETAILS).trim().toLowerCase()
   );
+const PUBLIC_API_ERROR_MESSAGE = String(
+  process.env.PUBLIC_API_ERROR_MESSAGE || "Временная ошибка. Повторите позже."
+).trim();
 const ACCESS_LINK_TOKEN = String(process.env.ACCESS_LINK_TOKEN || "").trim();
 const ACCESS_COOKIE_NAME = String(process.env.ACCESS_COOKIE_NAME || "fi_access").trim();
 const ACCESS_COOKIE_MAX_AGE_SEC = Number(
@@ -301,7 +304,10 @@ function sanitizeStrategiesPayload(payload) {
 }
 
 function sendApiError(res, statusCode, message, error) {
-  const payload = { error: message };
+  const payload = { error: PUBLIC_API_ERROR_MESSAGE };
+  if (EXPOSE_ERROR_DETAILS && message) {
+    payload.publicMessage = String(message);
+  }
   if (EXPOSE_ERROR_DETAILS) {
     payload.details = String(error && error.message ? error.message : error || "");
   }
@@ -450,7 +456,7 @@ app.get("/api/nav/:id", async (req, res) => {
 
     const fundId = Number(req.params.id);
     if (!Number.isFinite(fundId)) {
-      res.status(400).json({ error: "Некорректный id фонда" });
+      sendApiError(res, 400, "Некорректный id фонда");
       return;
     }
 
@@ -458,7 +464,7 @@ app.get("/api/nav/:id", async (req, res) => {
     const data = await provider.getNavByFundId(fundId, from, to);
 
     if (!data) {
-      res.status(404).json({ error: "Фонд не найден" });
+      sendApiError(res, 404, "Фонд не найден");
       return;
     }
 
@@ -488,9 +494,7 @@ app.get("/api/status", async (req, res) => {
       "public, max-age=10"
     );
   } catch (error) {
-    const payload = { ok: false, error: "Не удалось получить статус" };
-    if (EXPOSE_ERROR_DETAILS) payload.details = String(error.message || error);
-    res.status(500).json(payload);
+    sendApiError(res, 500, "Не удалось получить статус", error);
   }
 });
 
@@ -524,7 +528,7 @@ app.get("/api/strategies/:id/analytics", async (req, res) => {
   try {
     const strategyId = String(req.params.id || "").trim();
     if (!strategyId) {
-      res.status(400).json({ error: "Некорректный id стратегии" });
+      sendApiError(res, 400, "Некорректный id стратегии");
       return;
     }
 
