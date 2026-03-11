@@ -210,13 +210,15 @@ function sanitizeProgressMeta(progress) {
   };
 }
 
-function sanitizeStatusPayload(payload) {
+function sanitizeStatusPayload(payload, strategiesSummary) {
   const source = payload && typeof payload === "object" ? payload : {};
   const market = source.market && typeof source.market === "object" ? source.market : {};
   const compositions =
     source.compositions && typeof source.compositions === "object"
       ? source.compositions
       : {};
+  const strategies =
+    strategiesSummary && typeof strategiesSummary === "object" ? strategiesSummary : {};
 
   return {
     ok: source.ok !== false,
@@ -253,6 +255,22 @@ function sanitizeStatusPayload(payload) {
       failedFunds: Number(compositions.failedFunds) || 0,
       nextRetryAt: compositions.nextRetryAt || null,
       lastError: sanitizeErrorFlag(compositions.lastError),
+    },
+    strategies: {
+      generatedAt: strategies.generatedAt || null,
+      loadedAt: strategies.loadedAt || null,
+      stale: toSafeBool(strategies.stale),
+      refreshing: toSafeBool(strategies.refreshing),
+      lastError: sanitizeErrorFlag(strategies.lastError),
+      total: Number(strategies.total) || 0,
+      lastRun:
+        strategies.lastRun && typeof strategies.lastRun === "object"
+          ? {
+              ok: strategies.lastRun.ok !== false,
+              startedAt: strategies.lastRun.startedAt || null,
+              finishedAt: strategies.lastRun.finishedAt || null,
+            }
+          : null,
     },
   };
 }
@@ -485,8 +503,13 @@ app.get("/api/status", async (req, res) => {
       return;
     }
 
-    const rawPayload = await provider.getStatusSummary();
-    const payload = sanitizeStatusPayload(rawPayload);
+    const [rawPayload, strategiesSummary] = await Promise.all([
+      provider.getStatusSummary(),
+      Promise.resolve()
+        .then(() => strategiesProvider.getStrategiesStatusSummary())
+        .catch(() => null),
+    ]);
+    const payload = sanitizeStatusPayload(rawPayload, strategiesSummary);
     setCachedJson(cacheKey, payload, STATUS_API_CACHE_TTL_MS);
     sendJson(
       res,
