@@ -28,7 +28,7 @@ const STRATEGY_REQUEST_RETRIES = Number(
 const STRATEGY_DETAIL_CONCURRENCY = Number(
   process.env.STRATEGY_DETAIL_CONCURRENCY || (IS_RENDER ? 6 : 10)
 );
-const STRATEGY_CATALOG_LIMIT = Number(process.env.STRATEGY_CATALOG_LIMIT || 50);
+const STRATEGY_CATALOG_LIMIT = Number(process.env.STRATEGY_CATALOG_LIMIT || 100);
 const STRATEGY_MAX_CATALOG_PAGES = Number(process.env.STRATEGY_MAX_CATALOG_PAGES || 80);
 const STRATEGY_SCAN_ALL_TABS =
   process.env.STRATEGY_SCAN_ALL_TABS != null
@@ -984,7 +984,19 @@ async function getStrategyAnalytics(strategyId, { forceRefresh = false } = {}) {
   return payload;
 }
 
-function getStrategiesStatusSummary() {
+async function getStrategiesStatusSummary() {
+  await ensureDiskSnapshotLoaded();
+
+  if (!state.snapshot && !state.refreshPromise) {
+    refreshSnapshot().catch((error) => {
+      console.warn(`[strategies] status-trigger refresh failed: ${String(error.message || error)}`);
+    });
+  } else if (state.snapshot && isSnapshotStale() && !state.refreshPromise) {
+    refreshSnapshot().catch((error) => {
+      console.warn(`[strategies] status-trigger stale refresh failed: ${String(error.message || error)}`);
+    });
+  }
+
   const snapshot = state.snapshot;
   return {
     generatedAt: snapshot && snapshot.generatedAt ? snapshot.generatedAt : null,

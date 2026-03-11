@@ -383,18 +383,6 @@ body {
   min-height: 0;
   overflow: hidden;
 }
-.strategy-mode-toggle {
-  margin-left: 6px;
-}
-.strategy-mode-toggle button[data-mode="net"] {
-  border-color: rgba(255, 214, 102, 0.4);
-  color: #ffe08b;
-}
-.strategy-mode-toggle button[data-mode="net"].active {
-  background: #ffd666;
-  border-color: #ffd666;
-  color: #2a1f00;
-}
 .strategies-table-wrap {
   min-height: 0;
   background: var(--bg-secondary);
@@ -1244,10 +1232,6 @@ body {
       <button data-period="1Y" class="active">1Y</button>
       <button data-period="MAX">MAX</button>
     </div>
-    <div class="period-btns strategy-mode-toggle" id="strategyModeToggle">
-      <button data-mode="gross" class="active">Без комиссий</button>
-      <button data-mode="net">С комиссиями (оценка)</button>
-    </div>
     <button class="filter-btn" id="strategyReloadBtn">Обновить список</button>
   </div>
 
@@ -1258,14 +1242,16 @@ body {
           <tr>
             <th data-col="title">Стратегия</th>
             <th data-col="clients" class="num">Клиенты</th>
-            <th data-col="allTimeReturnPct" class="num sorted-desc">За все время</th>
-            <th data-col="return12mPct" class="num">12м</th>
+            <th data-col="allTimeReturnPct" class="num sorted-desc">За все время (брутто)</th>
+            <th data-col="allTimeReturnNetPct" class="num">За все время (нетто*)</th>
+            <th data-col="return12mPct" class="num">12м (брутто)</th>
+            <th data-col="return12mNetPct" class="num">12м (нетто*)</th>
             <th data-col="managedAmountValue" class="num">В управлении</th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td colspan="5" style="text-align:center;color:var(--text-secondary);padding:16px;">Откройте вкладку для загрузки стратегий</td>
+            <td colspan="7" style="text-align:center;color:var(--text-secondary);padding:16px;">Откройте вкладку для загрузки стратегий</td>
           </tr>
         </tbody>
       </table>
@@ -1286,14 +1272,15 @@ body {
           <thead>
             <tr>
               <th>Период</th>
-              <th class="num">Стратегия</th>
+              <th class="num">Стратегия (брутто)</th>
+              <th class="num">Стратегия (нетто*)</th>
               <th class="num">Бенчмарк</th>
-              <th class="num">Альфа</th>
+              <th class="num">Альфа (нетто*)</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td colspan="4" style="text-align:center;color:var(--text-secondary);padding:10px;">Выберите стратегию</td>
+              <td colspan="5" style="text-align:center;color:var(--text-secondary);padding:10px;">Выберите стратегию</td>
             </tr>
           </tbody>
         </table>
@@ -1448,7 +1435,6 @@ let strategiesSortCol = 'allTimeReturnPct';
 let strategiesSortDir = 'desc';
 let strategiesSelectedId = '';
 let strategyPeriod = '1Y';
-let strategyPerformanceMode = 'gross';
 let strategyChart = null;
 let strategyAnalyticsById = new Map();
 let strategyAutoRefreshTimer = null;
@@ -2185,7 +2171,9 @@ function renderMCCharts() {
 const STRATEGY_NUMERIC_COLS = new Set([
   'clients',
   'allTimeReturnPct',
+  'allTimeReturnNetPct',
   'return12mPct',
+  'return12mNetPct',
   'managedAmountValue',
 ]);
 
@@ -2220,23 +2208,6 @@ function initTabStrategies() {
     renderSelectedStrategyChart();
   });
 
-  const modeToggle = document.getElementById('strategyModeToggle');
-  if (modeToggle) {
-    modeToggle.addEventListener('click', (event) => {
-      const btn = event.target.closest('button[data-mode]');
-      if (!btn) return;
-      const nextMode = btn.dataset.mode === 'net' ? 'net' : 'gross';
-      if (nextMode === strategyPerformanceMode) return;
-      strategyPerformanceMode = nextMode;
-      modeToggle.querySelectorAll('button[data-mode]').forEach((b) => {
-        b.classList.toggle('active', b.dataset.mode === strategyPerformanceMode);
-      });
-      renderStrategiesTable();
-      renderSelectedStrategyInfo();
-      renderSelectedStrategyChart();
-    });
-  }
-
   document.getElementById('strategyReloadBtn').addEventListener('click', () => {
     loadStrategiesData(true, { keepSelection: true });
   });
@@ -2253,7 +2224,7 @@ async function loadStrategiesData(forceRefresh = false, options = {}) {
   }
   if (!silent && tbody && !strategiesLoaded) {
     tbody.innerHTML =
-      '<tr><td colspan=\"5\" style=\"text-align:center;color:var(--text-secondary);padding:16px;\">Загрузка стратегий...</td></tr>';
+      '<tr><td colspan=\"7\" style=\"text-align:center;color:var(--text-secondary);padding:16px;\">Загрузка стратегий...</td></tr>';
   }
 
   try {
@@ -2293,7 +2264,7 @@ async function loadStrategiesData(forceRefresh = false, options = {}) {
     console.warn(`[strategies] ${String(error.message || error)}`);
     strategiesLoaded = false;
     if (tbody) {
-      tbody.innerHTML = `<tr><td colspan=\"5\" style=\"text-align:center;color:var(--red);padding:16px;\">${escapeHtml(
+      tbody.innerHTML = `<tr><td colspan=\"7\" style=\"text-align:center;color:var(--red);padding:16px;\">${escapeHtml(
         String(error.message || error)
       )}</td></tr>`;
     }
@@ -2306,8 +2277,8 @@ async function loadStrategiesData(forceRefresh = false, options = {}) {
 function compareStrategiesRows(a, b, col, dir) {
   const direction = dir === 'asc' ? 1 : -1;
   if (STRATEGY_NUMERIC_COLS.has(col)) {
-    const aNumRaw = getStrategyNumericValueByMode(a, col);
-    const bNumRaw = getStrategyNumericValueByMode(b, col);
+    const aNumRaw = getStrategyNumericValueForColumn(a, col);
+    const bNumRaw = getStrategyNumericValueForColumn(b, col);
     if (aNumRaw == null && bNumRaw == null) return 0;
     if (aNumRaw == null) return 1;
     if (bNumRaw == null) return -1;
@@ -2318,10 +2289,6 @@ function compareStrategiesRows(a, b, col, dir) {
   const aText = String((a && a[col]) || '');
   const bText = String((b && b[col]) || '');
   return direction * aText.localeCompare(bText, 'ru');
-}
-
-function getStrategyModeLabel() {
-  return strategyPerformanceMode === 'net' ? 'с комиссиями (оценка)' : 'без комиссий';
 }
 
 function getStrategyFeeProfile(item) {
@@ -2360,7 +2327,7 @@ function getStrategyAllTimeYears(item) {
 
 function applyStrategyFeesEstimate(grossPct, feeProfile, years) {
   if (!Number.isFinite(Number(grossPct))) return null;
-  if (!feeProfile || strategyPerformanceMode !== 'net') return Number(grossPct);
+  if (!feeProfile) return Number(grossPct);
 
   const managementMonthlyPct = Number(feeProfile.managementMonthlyPct);
   const performancePct = Number(feeProfile.performancePct);
@@ -2403,7 +2370,6 @@ function applyStrategyFeesEstimate(grossPct, feeProfile, years) {
 function getStrategyReturnPctByMode(item, sourceField, periodYears) {
   const raw = Number(item && item[sourceField]);
   if (!Number.isFinite(raw)) return null;
-  if (strategyPerformanceMode !== 'net') return raw;
 
   const years =
     Number.isFinite(Number(periodYears))
@@ -2414,16 +2380,20 @@ function getStrategyReturnPctByMode(item, sourceField, periodYears) {
   return applyStrategyFeesEstimate(raw, getStrategyFeeProfile(item), years);
 }
 
-function getStrategyNumericValueByMode(item, col) {
+function getStrategyNumericValueForColumn(item, col) {
   if (!item || typeof item !== 'object') return null;
-  if (col === 'allTimeReturnPct') {
+  if (col === 'allTimeReturnPct' || col === 'return12mPct') {
+    const val = Number(item[col]);
+    return Number.isFinite(val) ? val : null;
+  }
+  if (col === 'allTimeReturnNetPct') {
     return getStrategyReturnPctByMode(item, 'allTimeReturnPct');
   }
-  if (col === 'return12mPct') {
+  if (col === 'return12mNetPct') {
     return getStrategyReturnPctByMode(item, 'return12mPct', 1);
   }
-  const val = Number(item[col]);
-  return Number.isFinite(val) ? val : null;
+  const raw = Number(item && item[col]);
+  return Number.isFinite(raw) ? raw : null;
 }
 
 function monthKeyFromTimestamp(ts) {
@@ -2453,9 +2423,6 @@ function buildStrategyNetSeriesFromPoints(points, item) {
     .sort((a, b) => a.timestamp - b.timestamp);
 
   if (!normalized.length) return [];
-  if (strategyPerformanceMode !== 'net') {
-    return normalized.map((row) => ({ ...row, netValue: row.value }));
-  }
 
   const feeProfile = getStrategyFeeProfile(item);
   const managementRateMonthly =
@@ -2565,22 +2532,26 @@ function renderStrategiesTable() {
   if (!tbody) return;
   if (!rows.length) {
     tbody.innerHTML =
-      '<tr><td colspan=\"5\" style=\"text-align:center;color:var(--text-secondary);padding:16px;\">Нет доступных стратегий</td></tr>';
+      '<tr><td colspan=\"7\" style=\"text-align:center;color:var(--text-secondary);padding:16px;\">Нет доступных стратегий</td></tr>';
   } else {
     tbody.innerHTML = rows.map((row) => {
       const id = String(row.id || '');
       const selectedClass = id === String(strategiesSelectedId) ? ' selected' : '';
       const managedAmountText = formatManagedAmountText(row);
-      const allTimePct = getStrategyReturnPctByMode(row, 'allTimeReturnPct');
-      const return12mPct = getStrategyReturnPctByMode(row, 'return12mPct', 1);
+      const allTimeGrossPct = Number.isFinite(Number(row.allTimeReturnPct)) ? Number(row.allTimeReturnPct) : null;
+      const allTimeNetPct = getStrategyReturnPctByMode(row, 'allTimeReturnPct');
+      const return12mGrossPct = Number.isFinite(Number(row.return12mPct)) ? Number(row.return12mPct) : null;
+      const return12mNetPct = getStrategyReturnPctByMode(row, 'return12mPct', 1);
       return `<tr data-id=\"${escapeAttr(id)}\" class=\"${selectedClass.trim()}\">
         <td class=\"name-cell\" title=\"${escapeAttr(row.title || '')}\">
           <div class=\"strategy-name\">${escapeHtml(row.title || '—')}</div>
           <div class=\"strategy-author\">${escapeHtml(row.ownerNickname || 'Автор не указан')}</div>
         </td>
         <td class=\"num\">${escapeHtml(fmtInteger(row.clients))}</td>
-        ${renderStrategyPctCell(allTimePct)}
-        ${renderStrategyPctCell(return12mPct)}
+        ${renderStrategyPctCell(allTimeGrossPct)}
+        ${renderStrategyPctCell(allTimeNetPct)}
+        ${renderStrategyPctCell(return12mGrossPct)}
+        ${renderStrategyPctCell(return12mNetPct)}
         <td class=\"num\">${escapeHtml(managedAmountText)}</td>
       </tr>`;
     }).join('');
@@ -2591,13 +2562,20 @@ function renderStrategiesTable() {
     const updatedAt = strategiesMeta && strategiesMeta.generatedAt
       ? formatDateTimeRu(strategiesMeta.generatedAt)
       : '--';
+    const sourceTotal = Number.isFinite(Number(strategiesMeta && strategiesMeta.total))
+      ? Number(strategiesMeta.total)
+      : rows.length;
+    const failedDetails = Number.isFinite(Number(strategiesMeta && strategiesMeta.failedDetailsCount))
+      ? Number(strategiesMeta.failedDetailsCount)
+      : 0;
     const stale = Boolean(strategiesMeta && strategiesMeta.stale);
     const refreshing = Boolean(strategiesMeta && strategiesMeta.refreshing);
     const hasError = Boolean(strategiesMeta && strategiesMeta.lastError);
     summaryEl.textContent =
-      `Стратегий: ${rows.length} · Режим: ${getStrategyModeLabel()} · Обновлено: ${updatedAt}` +
+      `Стратегий: ${rows.length} (источник: ${sourceTotal}) · Обновлено: ${updatedAt}` +
       (refreshing ? ' · обновляем' : '') +
       (stale ? ' · кэш устарел, идет фоновое обновление' : '') +
+      (failedDetails > 0 ? ` · детали недоступны: ${failedDetails}` : '') +
       (hasError ? ' · были ошибки обновления' : '');
   }
 }
@@ -2655,14 +2633,16 @@ function renderSelectedStrategyInfo() {
       ? `${Math.round(Number(item.minAmountValue)).toLocaleString('ru-RU')} ₽`
       : '—';
   const managedAmountText = formatManagedAmountText(item);
-  const allTimeYears = getStrategyAllTimeYears(item);
-  const allTimeReturn = getStrategyReturnPctByMode(item, 'allTimeReturnPct', allTimeYears);
-  const return12m = getStrategyReturnPctByMode(item, 'return12mPct', 1);
-  const performanceTitleSuffix = strategyPerformanceMode === 'net' ? ' (нетто*)' : '';
+  const allTimeReturnGross = Number.isFinite(Number(item.allTimeReturnPct)) ? Number(item.allTimeReturnPct) : null;
+  const allTimeReturnNet = getStrategyReturnPctByMode(item, 'allTimeReturnPct');
+  const return12mGross = Number.isFinite(Number(item.return12mPct)) ? Number(item.return12mPct) : null;
+  const return12mNet = getStrategyReturnPctByMode(item, 'return12mPct', 1);
 
   const metaRows = [
-    { label: `Доходность, все время${performanceTitleSuffix}`, value: signedPercentText(allTimeReturn, 1) },
-    { label: `Доходность, 12м${performanceTitleSuffix}`, value: signedPercentText(return12m, 1) },
+    { label: 'Доходность, все время (брутто)', value: signedPercentText(allTimeReturnGross, 1) },
+    { label: 'Доходность, все время (нетто*)', value: signedPercentText(allTimeReturnNet, 1) },
+    { label: 'Доходность, 12м (брутто)', value: signedPercentText(return12mGross, 1) },
+    { label: 'Доходность, 12м (нетто*)', value: signedPercentText(return12mNet, 1) },
     { label: 'В управлении', value: managedAmountText },
     { label: 'Подписчиков', value: fmtInteger(item.clients) },
     { label: 'Мин. сумма', value: minAmountText },
@@ -2675,10 +2655,9 @@ function renderSelectedStrategyInfo() {
     .map((row) => `<div class=\"strategy-meta-item\"><span class=\"k\">${escapeHtml(row.label)}</span><span class=\"v\">${escapeHtml(row.value)}</span></div>`)
     .join('');
 
-  const modeHint = strategyPerformanceMode === 'net'
-    ? ' *Нетто-режим: оценка с учетом комиссии за управление и за результат (без налогов и брокерских издержек).'
-    : '';
-  descEl.textContent = `${item.description || item.shortDescription || 'Описание недоступно.'}${modeHint}`;
+  const netHint =
+    ' *Нетто — оценка с учетом комиссии за управление и за результат (без налогов и прочих издержек).';
+  descEl.textContent = `${item.description || item.shortDescription || 'Описание недоступно.'}${netHint}`;
 
   const companies = item.portfolio && Array.isArray(item.portfolio.companies)
     ? item.portfolio.companies
@@ -2756,7 +2735,7 @@ function renderStrategyBenchmarkTable() {
   const item = getSelectedStrategyItem();
   if (!item || !strategiesSelectedId) {
     tableEl.innerHTML =
-      '<tbody><tr><td colspan=\"4\" style=\"text-align:center;color:var(--text-secondary);padding:10px;\">Выберите стратегию</td></tr></tbody>';
+      '<tbody><tr><td colspan=\"5\" style=\"text-align:center;color:var(--text-secondary);padding:10px;\">Выберите стратегию</td></tr></tbody>';
     return;
   }
 
@@ -2764,7 +2743,7 @@ function renderStrategyBenchmarkTable() {
   const allPoints = payload && Array.isArray(payload.points) ? payload.points : [];
   if (!allPoints.length) {
     tableEl.innerHTML =
-      '<tbody><tr><td colspan=\"4\" style=\"text-align:center;color:var(--text-secondary);padding:10px;\">Данные динамики загружаются...</td></tr></tbody>';
+      '<tbody><tr><td colspan=\"5\" style=\"text-align:center;color:var(--text-secondary);padding:10px;\">Данные динамики загружаются...</td></tr></tbody>';
     return;
   }
 
@@ -2774,14 +2753,12 @@ function renderStrategyBenchmarkTable() {
     const periodPoints = period === 'MAX'
       ? pointsForCalc
       : filterStrategyPointsByPeriod(pointsForCalc, period);
-    const strategyPct = calcSeriesReturnPct(
-      periodPoints,
-      strategyPerformanceMode === 'net' ? 'netValue' : 'value'
-    );
+    const strategyGrossPct = calcSeriesReturnPct(periodPoints, 'value');
+    const strategyNetPct = calcSeriesReturnPct(periodPoints, 'netValue');
     const benchmarkPct = calcSeriesReturnPct(periodPoints, 'benchmarkValue');
-    const alphaPct =
-      Number.isFinite(Number(strategyPct)) && Number.isFinite(Number(benchmarkPct))
-        ? Number(strategyPct) - Number(benchmarkPct)
+    const alphaNetPct =
+      Number.isFinite(Number(strategyNetPct)) && Number.isFinite(Number(benchmarkPct))
+        ? Number(strategyNetPct) - Number(benchmarkPct)
         : null;
     const pctCell = (value) => {
       if (!Number.isFinite(Number(value))) return '<td class=\"num\">—</td>';
@@ -2791,9 +2768,10 @@ function renderStrategyBenchmarkTable() {
 
     return `<tr>
       <td>${escapeHtml(getStrategyPeriodLabel(period))}</td>
-      ${pctCell(strategyPct)}
+      ${pctCell(strategyGrossPct)}
+      ${pctCell(strategyNetPct)}
       ${pctCell(benchmarkPct)}
-      ${pctCell(alphaPct)}
+      ${pctCell(alphaNetPct)}
     </tr>`;
   }).join('');
 
@@ -2801,9 +2779,10 @@ function renderStrategyBenchmarkTable() {
     <thead>
       <tr>
         <th>Период</th>
-        <th class="num">Стратегия${strategyPerformanceMode === 'net' ? ' (нетто*)' : ''}</th>
+        <th class="num">Стратегия (брутто)</th>
+        <th class="num">Стратегия (нетто*)</th>
         <th class="num">Бенчмарк</th>
-        <th class="num">Альфа</th>
+        <th class="num">Альфа (нетто*)</th>
       </tr>
     </thead>
     <tbody>
@@ -2883,32 +2862,38 @@ function renderSelectedStrategyChart() {
     return;
   }
 
-  const selectedValueKey = strategyPerformanceMode === 'net' ? 'netValue' : 'value';
-  const firstValuePoint = points.find((row) => Number.isFinite(Number(row[selectedValueKey])));
-  if (
-    !firstValuePoint ||
-    !Number.isFinite(Number(firstValuePoint[selectedValueKey])) ||
-    Number(firstValuePoint[selectedValueKey]) === 0
-  ) {
+  const firstGrossPoint = points.find((row) => Number.isFinite(Number(row.value)));
+  const firstNetPoint = points.find((row) => Number.isFinite(Number(row.netValue)));
+  if (!firstGrossPoint || !firstNetPoint || Number(firstGrossPoint.value) === 0 || Number(firstNetPoint.netValue) === 0) {
     setStrategyChartPlaceholder(`Динамика: ${item.title || '—'} · нет данных`);
     renderStrategyBenchmarkTable();
     return;
   }
 
-  const baseValue = Number(firstValuePoint[selectedValueKey]);
+  const baseGross = Number(firstGrossPoint.value);
+  const baseNet = Number(firstNetPoint.netValue);
   const firstBenchmarkPoint = points.find((row) => Number.isFinite(Number(row.benchmarkValue)));
   const baseBenchmark =
     firstBenchmarkPoint && Number.isFinite(Number(firstBenchmarkPoint.benchmarkValue))
       ? Number(firstBenchmarkPoint.benchmarkValue)
       : null;
 
-  const strategySeries = points.map((row) => {
-    const value = Number(row[selectedValueKey]);
+  const strategySeriesGross = points.map((row) => {
+    const value = Number(row.value);
     const xTs = Number.isFinite(Number(row.timestamp))
       ? Number(row.timestamp)
       : Date.parse(String(row.date || row.time || ''));
     if (!Number.isFinite(value) || !Number.isFinite(xTs)) return null;
-    return { x: xTs, y: ((value / baseValue) - 1) * 100 };
+    return { x: xTs, y: ((value / baseGross) - 1) * 100 };
+  }).filter(Boolean);
+
+  const strategySeriesNet = points.map((row) => {
+    const value = Number(row.netValue);
+    const xTs = Number.isFinite(Number(row.timestamp))
+      ? Number(row.timestamp)
+      : Date.parse(String(row.date || row.time || ''));
+    if (!Number.isFinite(value) || !Number.isFinite(xTs)) return null;
+    return { x: xTs, y: ((value / baseNet) - 1) * 100 };
   }).filter(Boolean);
 
   const benchmarkSeries = (baseBenchmark != null && baseBenchmark !== 0)
@@ -2922,18 +2907,19 @@ function renderSelectedStrategyChart() {
     }).filter(Boolean)
     : [];
 
-  if (!strategySeries.length) {
+  if (!strategySeriesGross.length && !strategySeriesNet.length) {
     setStrategyChartPlaceholder(`Динамика: ${item.title || '—'} · нет данных`);
     renderStrategyBenchmarkTable();
     return;
   }
 
-  const lastValue = strategySeries[strategySeries.length - 1].y;
-  const perfText = signedPercentText(lastValue, 2);
+  const lastGross = strategySeriesGross.length ? strategySeriesGross[strategySeriesGross.length - 1].y : null;
+  const lastNet = strategySeriesNet.length ? strategySeriesNet[strategySeriesNet.length - 1].y : null;
   const titleEl = document.getElementById('strategyChartTitle');
   if (titleEl) {
-    const modeText = strategyPerformanceMode === 'net' ? ' · нетто*' : '';
-    titleEl.textContent = `Динамика (${strategyPeriod}) от начала периода: ${perfText}${modeText}`;
+    titleEl.textContent =
+      `Динамика (${strategyPeriod}) от начала периода: ` +
+      `брутто ${signedPercentText(lastGross, 2)} · нетто* ${signedPercentText(lastNet, 2)}`;
   }
 
   if (strategyChart) strategyChart.destroy();
@@ -2943,22 +2929,34 @@ function renderSelectedStrategyChart() {
   const gridColor = cssVar('--grid-color', 'rgba(255, 18, 61, 0.2)');
   const textColor = cssVar('--text-secondary', '#9a9aaa');
   const strategyColor = cssVar('--accent', '#ff123d');
+  const strategyNetColor = '#ffd666';
   const benchmarkColor = '#7d8ba8';
 
-  const datasets = [
-    {
-      label: strategyPerformanceMode === 'net'
-        ? `${item.title || 'Стратегия'} (нетто*)`
-        : (item.title || 'Стратегия'),
-      data: strategySeries,
+  const datasets = [];
+  if (strategySeriesGross.length) {
+    datasets.push({
+      label: `${item.title || 'Стратегия'} (брутто)`,
+      data: strategySeriesGross,
       borderColor: strategyColor,
       backgroundColor: hexToRgba(strategyColor, 0.12),
       borderWidth: 2,
       pointRadius: 0,
       pointHoverRadius: 3,
       tension: 0.15,
-    },
-  ];
+    });
+  }
+  if (strategySeriesNet.length) {
+    datasets.push({
+      label: `${item.title || 'Стратегия'} (нетто*)`,
+      data: strategySeriesNet,
+      borderColor: strategyNetColor,
+      borderWidth: 1.8,
+      borderDash: [6, 3],
+      pointRadius: 0,
+      pointHoverRadius: 3,
+      tension: 0.15,
+    });
+  }
 
   if (benchmarkSeries.length) {
     datasets.push({
