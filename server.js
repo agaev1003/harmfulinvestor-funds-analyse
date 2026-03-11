@@ -19,6 +19,11 @@ const STRATEGY_API_CACHE_TTL_MS = Number(
 const STRATEGY_ANALYTICS_API_CACHE_TTL_MS = Number(
   process.env.STRATEGY_ANALYTICS_API_CACHE_TTL_MS || 90_000
 );
+const EXPOSE_ERROR_DETAILS =
+  process.env.EXPOSE_ERROR_DETAILS != null &&
+  !["0", "false", "no"].includes(
+    String(process.env.EXPOSE_ERROR_DETAILS).trim().toLowerCase()
+  );
 const ACCESS_LINK_TOKEN = String(process.env.ACCESS_LINK_TOKEN || "").trim();
 const ACCESS_COOKIE_NAME = String(process.env.ACCESS_COOKIE_NAME || "fi_access").trim();
 const ACCESS_COOKIE_MAX_AGE_SEC = Number(
@@ -176,6 +181,133 @@ function sendJson(res, payload, cacheControl) {
   res.json(payload);
 }
 
+function toSafeBool(value) {
+  return Boolean(value);
+}
+
+function toSafeNumber(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function sanitizeErrorFlag(value) {
+  return value ? true : null;
+}
+
+function sanitizeProgressMeta(progress) {
+  if (!progress || typeof progress !== "object") return null;
+  return {
+    startedAt: progress.startedAt || null,
+    mode: progress.mode || null,
+    candidateTotal: Number(progress.candidateTotal) || 0,
+    processed: Number(progress.processed) || 0,
+    successCount: Number(progress.successCount) || 0,
+    noStructureCount: Number(progress.noStructureCount) || 0,
+    failedCount: Number(progress.failedCount) || 0,
+  };
+}
+
+function sanitizeStatusPayload(payload) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  const market = source.market && typeof source.market === "object" ? source.market : {};
+  const compositions =
+    source.compositions && typeof source.compositions === "object"
+      ? source.compositions
+      : {};
+
+  return {
+    ok: source.ok !== false,
+    source: "private",
+    funds: Number(source.funds) || 0,
+    generatedAt: source.generatedAt || null,
+    generatedAgeDays: toSafeNumber(source.generatedAgeDays),
+    staleMarkDays: toSafeNumber(source.staleMarkDays),
+    refreshing: {
+      market: toSafeBool(source.refreshing && source.refreshing.market),
+      compositions: toSafeBool(source.refreshing && source.refreshing.compositions),
+    },
+    market: {
+      generatedAt: market.generatedAt || null,
+      generatedAgeDays: toSafeNumber(market.generatedAgeDays),
+      refreshing: toSafeBool(market.refreshing),
+      failedFunds: Number(market.failedFunds) || 0,
+      failedHistoryBatches: Number(market.failedHistoryBatches) || 0,
+      failedListPages: Number(market.failedListPages) || 0,
+      nextRetryAt: market.nextRetryAt || null,
+      lastError: sanitizeErrorFlag(market.lastError),
+    },
+    compositions: {
+      generatedAt: compositions.generatedAt || null,
+      fundUniverse: toSafeNumber(compositions.fundUniverse),
+      itemsCount: Number(compositions.itemsCount) || 0,
+      refreshedCount: toSafeNumber(compositions.refreshedCount),
+      staleMarkDays: toSafeNumber(compositions.staleMarkDays),
+      staleCount: Number(compositions.staleCount) || 0,
+      maxAgeDays: toSafeNumber(compositions.maxAgeDays),
+      latestStructureDate: compositions.latestStructureDate || null,
+      refreshing: toSafeBool(compositions.refreshing),
+      progress: sanitizeProgressMeta(compositions.progress),
+      failedFunds: Number(compositions.failedFunds) || 0,
+      nextRetryAt: compositions.nextRetryAt || null,
+      lastError: sanitizeErrorFlag(compositions.lastError),
+    },
+  };
+}
+
+function sanitizeCompositionsPayload(payload) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  const meta = source.meta && typeof source.meta === "object" ? source.meta : {};
+  const items = Array.isArray(source.items) ? source.items : [];
+  return {
+    items: items.map((row) => {
+      const safe = row && typeof row === "object" ? { ...row } : {};
+      // Not used by UI; keeps internal parser identifiers private.
+      delete safe.source_id;
+      return safe;
+    }),
+    meta: {
+      generatedAt: meta.generatedAt || null,
+      fundUniverse: toSafeNumber(meta.fundUniverse),
+      itemsCount: Number(meta.itemsCount) || 0,
+      refreshedCount: toSafeNumber(meta.refreshedCount),
+      staleMarkDays: toSafeNumber(meta.staleMarkDays),
+      staleCount: Number(meta.staleCount) || 0,
+      maxAgeDays: toSafeNumber(meta.maxAgeDays),
+      latestStructureDate: meta.latestStructureDate || null,
+      refreshing: toSafeBool(meta.refreshing),
+      progress: sanitizeProgressMeta(meta.progress),
+      failedFunds: Number(meta.failedFunds) || 0,
+      nextRetryAt: meta.nextRetryAt || null,
+      lastError: sanitizeErrorFlag(meta.lastError),
+    },
+  };
+}
+
+function sanitizeStrategiesPayload(payload) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  if (Array.isArray(source)) return source;
+  return {
+    generatedAt: source.generatedAt || null,
+    loadedAt: source.loadedAt || null,
+    stale: toSafeBool(source.stale),
+    refreshing: toSafeBool(source.refreshing),
+    lastError: sanitizeErrorFlag(source.lastError),
+    total: Number(source.total) || 0,
+    activeCount: toSafeNumber(source.activeCount),
+    tabCount: toSafeNumber(source.tabCount),
+    failedDetailsCount: toSafeNumber(source.failedDetailsCount),
+    items: Array.isArray(source.items) ? source.items : [],
+  };
+}
+
+function sendApiError(res, statusCode, message, error) {
+  const payload = { error: message };
+  if (EXPOSE_ERROR_DETAILS) {
+    payload.details = String(error && error.message ? error.message : error || "");
+  }
+  res.status(statusCode).json(payload);
+}
+
 function parseFromTo(query) {
   const normalizeIsoDate = (value) => {
     if (!value) return null;
@@ -205,10 +337,7 @@ app.get("/api/funds", async (req, res) => {
     setCachedJson(cacheKey, data, API_CACHE_TTL_MS);
     sendJson(res, data, "public, max-age=60");
   } catch (error) {
-    res.status(500).json({
-      error: "Не удалось сформировать список фондов",
-      details: String(error.message || error),
-    });
+    sendApiError(res, 500, "Не удалось сформировать список фондов", error);
   }
 });
 
@@ -238,10 +367,7 @@ app.get("/api/returns", async (req, res) => {
     setCachedJson(cacheKey, data, API_CACHE_TTL_MS);
     sendJson(res, data, "public, max-age=60");
   } catch (error) {
-    res.status(500).json({
-      error: "Не удалось сформировать доходности фондов",
-      details: String(error.message || error),
-    });
+    sendApiError(res, 500, "Не удалось сформировать доходности фондов", error);
   }
 });
 
@@ -259,21 +385,20 @@ app.get("/api/compositions", async (req, res) => {
         sendJson(res, cached, "public, max-age=15");
         return;
       }
-      const data = await provider.getCompositionsPayload({ forceRefresh: false });
+      const rawData = await provider.getCompositionsPayload({ forceRefresh: false });
+      const data = sanitizeCompositionsPayload(rawData);
       setCachedJson(cacheKey, data, COMPOSITION_API_CACHE_TTL_MS);
       sendJson(res, data, "public, max-age=15");
       return;
     }
 
-    const data = await provider.getCompositionsPayload({ forceRefresh: true });
+    const rawData = await provider.getCompositionsPayload({ forceRefresh: true });
+    const data = sanitizeCompositionsPayload(rawData);
     invalidateApiCacheByPrefix("/api/compositions");
     setCachedJson("/api/compositions", data, COMPOSITION_API_CACHE_TTL_MS);
     sendJson(res, data, "public, max-age=5");
   } catch (error) {
-    res.status(500).json({
-      error: "Не удалось сформировать составы фондов",
-      details: String(error.message || error),
-    });
+    sendApiError(res, 500, "Не удалось сформировать составы фондов", error);
   }
 });
 
@@ -291,10 +416,7 @@ app.get("/api/market", async (req, res) => {
     setCachedJson(cacheKey, data, API_CACHE_TTL_MS);
     sendJson(res, data, "public, max-age=30");
   } catch (error) {
-    res.status(500).json({
-      error: "Не удалось сформировать данные вкладки Рынок",
-      details: String(error.message || error),
-    });
+    sendApiError(res, 500, "Не удалось сформировать данные вкладки Рынок", error);
   }
 });
 
@@ -313,10 +435,7 @@ app.get("/api/mc-detail", async (req, res) => {
     setCachedJson(cacheKey, data, API_CACHE_TTL_MS);
     sendJson(res, data, "public, max-age=30");
   } catch (error) {
-    res.status(500).json({
-      error: "Не удалось сформировать данные вкладки УК",
-      details: String(error.message || error),
-    });
+    sendApiError(res, 500, "Не удалось сформировать данные вкладки УК", error);
   }
 });
 
@@ -347,10 +466,7 @@ app.get("/api/nav/:id", async (req, res) => {
     setCachedJson(cacheKey, payload, NAV_API_CACHE_TTL_MS);
     sendJson(res, payload, "public, max-age=120");
   } catch (error) {
-    res.status(500).json({
-      error: "Не удалось загрузить историю фонда",
-      details: String(error.message || error),
-    });
+    sendApiError(res, 500, "Не удалось загрузить историю фонда", error);
   }
 });
 
@@ -363,7 +479,8 @@ app.get("/api/status", async (req, res) => {
       return;
     }
 
-    const payload = await provider.getStatusSummary();
+    const rawPayload = await provider.getStatusSummary();
+    const payload = sanitizeStatusPayload(rawPayload);
     setCachedJson(cacheKey, payload, STATUS_API_CACHE_TTL_MS);
     sendJson(
       res,
@@ -371,10 +488,9 @@ app.get("/api/status", async (req, res) => {
       "public, max-age=10"
     );
   } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: String(error.message || error),
-    });
+    const payload = { ok: false, error: "Не удалось получить статус" };
+    if (EXPOSE_ERROR_DETAILS) payload.details = String(error.message || error);
+    res.status(500).json(payload);
   }
 });
 
@@ -394,15 +510,13 @@ app.get("/api/strategies", async (req, res) => {
       }
     }
 
-    const payload = await strategiesProvider.getStrategiesPayload({ forceRefresh });
+    const rawPayload = await strategiesProvider.getStrategiesPayload({ forceRefresh });
+    const payload = sanitizeStrategiesPayload(rawPayload);
     if (forceRefresh) invalidateApiCacheByPrefix("/api/strategies");
     setCachedJson(forceRefresh ? "/api/strategies" : cacheKey, payload, STRATEGY_API_CACHE_TTL_MS);
     sendJson(res, payload, forceRefresh ? "public, max-age=5" : "public, max-age=20");
   } catch (error) {
-    res.status(500).json({
-      error: "Не удалось загрузить стратегии автоследования",
-      details: String(error.message || error),
-    });
+    sendApiError(res, 500, "Не удалось загрузить стратегии автоследования", error);
   }
 });
 
@@ -439,10 +553,7 @@ app.get("/api/strategies/:id/analytics", async (req, res) => {
     );
     sendJson(res, payload, forceRefresh ? "public, max-age=10" : "public, max-age=45");
   } catch (error) {
-    res.status(500).json({
-      error: "Не удалось загрузить график стратегии",
-      details: String(error.message || error),
-    });
+    sendApiError(res, 500, "Не удалось загрузить график стратегии", error);
   }
 });
 
