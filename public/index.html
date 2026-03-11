@@ -74,18 +74,28 @@ body {
 }
 .update-pill {
   display: inline-flex;
+  flex-direction: column;
   align-items: flex-start;
-  gap: 6px;
-  padding: 5px 10px;
+  gap: 2px;
+  padding: 6px 12px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 16px;
   background: rgba(255, 18, 61, 0.08);
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.25;
-  white-space: pre-line;
+  white-space: normal;
   text-align: left;
-  max-width: min(72vw, 1320px);
+  max-width: min(76vw, 1480px);
+}
+.update-pill-main {
+  color: inherit;
+  font-weight: 600;
+}
+.update-pill-details {
+  color: var(--text-secondary);
+  opacity: 0.92;
+  font-size: 11px;
 }
 .update-pill.refreshing {
   border-color: #b27c1e;
@@ -372,6 +382,18 @@ body {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+.strategy-mode-toggle {
+  margin-left: 6px;
+}
+.strategy-mode-toggle button[data-mode="net"] {
+  border-color: rgba(255, 214, 102, 0.4);
+  color: #ffe08b;
+}
+.strategy-mode-toggle button[data-mode="net"].active {
+  background: #ffd666;
+  border-color: #ffd666;
+  color: #2a1f00;
 }
 .strategies-table-wrap {
   min-height: 0;
@@ -937,6 +959,10 @@ body {
     margin-left: 0;
     padding-left: 0;
   }
+  .update-pill {
+    width: 100%;
+    max-width: 100%;
+  }
   .strategies-wrap {
     grid-template-columns: 1fr;
     overflow: auto;
@@ -995,7 +1021,10 @@ body {
   <button class="tab-btn" data-tab="composition">Подборка фондов, состав</button>
   <button class="tab-btn strategies-tab" data-tab="strategies">Автоследование</button>
   <div class="top-right-status">
-    <span class="update-pill" id="globalUpdateStatus">Обновление: --</span>
+    <span class="update-pill" id="globalUpdateStatus">
+      <span class="update-pill-main" id="globalUpdateStatusMain">Обновление: --</span>
+      <span class="update-pill-details" id="globalUpdateStatusDetails"></span>
+    </span>
   </div>
 </div>
 
@@ -1215,6 +1244,10 @@ body {
       <button data-period="1Y" class="active">1Y</button>
       <button data-period="MAX">MAX</button>
     </div>
+    <div class="period-btns strategy-mode-toggle" id="strategyModeToggle">
+      <button data-mode="gross" class="active">Без комиссий</button>
+      <button data-mode="net">С комиссиями (оценка)</button>
+    </div>
     <button class="filter-btn" id="strategyReloadBtn">Обновить список</button>
   </div>
 
@@ -1415,6 +1448,7 @@ let strategiesSortCol = 'allTimeReturnPct';
 let strategiesSortDir = 'desc';
 let strategiesSelectedId = '';
 let strategyPeriod = '1Y';
+let strategyPerformanceMode = 'gross';
 let strategyChart = null;
 let strategyAnalyticsById = new Map();
 let strategyAutoRefreshTimer = null;
@@ -1586,8 +1620,22 @@ async function refreshGlobalStatus() {
 }
 
 function updateGlobalStatusPill(statusPayload) {
-  const el = document.getElementById('globalUpdateStatus');
-  if (!el) return;
+  const pillEl = document.getElementById('globalUpdateStatus');
+  if (!pillEl) return;
+  const mainEl = document.getElementById('globalUpdateStatusMain');
+  const detailsEl = document.getElementById('globalUpdateStatusDetails');
+
+  if (!statusPayload || typeof statusPayload !== 'object') {
+    if (mainEl && detailsEl) {
+      mainEl.textContent = 'Обновлено: --';
+      detailsEl.textContent = 'Статус недоступен';
+    } else {
+      pillEl.textContent = 'Обновлено: --';
+    }
+    pillEl.classList.remove('refreshing', 'stale');
+    pillEl.title = '';
+    return;
+  }
 
   const market = statusPayload && statusPayload.market
     ? statusPayload.market
@@ -1676,14 +1724,23 @@ function updateGlobalStatusPill(statusPayload) {
     (compositions && compositions.refreshing)
   );
 
+  const strategyRefreshing = Boolean(strategies && strategies.refreshing);
+  const strategyLastErrorFlag = Boolean(strategies && strategies.lastError);
+  const strategyLastRun =
+    strategies && strategies.lastRun && typeof strategies.lastRun === 'object'
+      ? strategies.lastRun
+      : null;
+  const strategyLastRunFailed = Boolean(strategyLastRun && strategyLastRun.ok === false);
+  const strategyGeneratedAt = strategies && strategies.generatedAt ? String(strategies.generatedAt) : '';
+  const strategySoftError = Boolean(strategyLastErrorFlag && strategyGeneratedAt);
+  const strategyHardError = Boolean(strategyLastErrorFlag && !strategyGeneratedAt);
+
   const refreshing = Boolean(
     (statusPayload && statusPayload.refreshing &&
       (statusPayload.refreshing.market || statusPayload.refreshing.compositions)) ||
-    (compositions && compositions.refreshing)
+    (compositions && compositions.refreshing) ||
+    strategyRefreshing
   );
-  const strategyRefreshing = Boolean(strategies && strategies.refreshing);
-  const strategyLastError = Boolean(strategies && strategies.lastError);
-  const strategyGeneratedAt = strategies && strategies.generatedAt ? String(strategies.generatedAt) : '';
 
   let text = `Обновлено: ${updatedAt ? formatDateTimeRu(updatedAt) : '--'}`;
   if (staleCount != null) text += ` · ${staleMarkDays}+д: ${staleCount}`;
@@ -1738,8 +1795,13 @@ function updateGlobalStatusPill(statusPayload) {
   if (failedFunds > 0) text += ` · ошибок фондов: ${failedFunds}`;
   if (marketLastError) text += ' · ошибка обновления рынка';
   if (lastError) text += ' · ошибка обновления состава';
-  if (strategyRefreshing) text += ' · автослед обновляем';
-  if (strategyLastError) text += ' · ошибка автоследа';
+  if (strategyRefreshing) {
+    text += ' · автослед обновляем';
+  } else if (strategyHardError) {
+    text += ' · автослед: ошибка';
+  } else if (strategySoftError) {
+    text += ' · автослед: кэш (посл. попытка с ошибкой)';
+  }
   const nextRetryTs = Math.max(
     Date.parse(marketNextRetryAt || ''),
     Date.parse(compositionsNextRetryAt || '')
@@ -1752,21 +1814,34 @@ function updateGlobalStatusPill(statusPayload) {
 
   const detailInlineParts = [];
   detailInlineParts.push(`Рынок: ${marketRefreshing ? 'обновляется' : (marketLastError ? 'ошибка' : 'ok')}`);
-  if (updatedAt) detailInlineParts.push(`рынок обновлено ${formatDateTimeRu(updatedAt)}`);
+  if (updatedAt) detailInlineParts.push(`рынок ${formatDateTimeRu(updatedAt)}`);
   if (marketStartedAt && marketRefreshing) detailInlineParts.push(`рынок старт ${formatDateTimeRu(marketStartedAt)}`);
   if (marketNextRetryAt) detailInlineParts.push(`рынок ретрай ${formatDateTimeRu(marketNextRetryAt)}`);
   detailInlineParts.push(`Состав: ${compositionRefreshing ? 'обновляется' : (lastError ? 'ошибка' : 'ok')}`);
-  if (compositions && compositions.generatedAt) detailInlineParts.push(`состав обновлено ${formatDateTimeRu(compositions.generatedAt)}`);
+  if (compositions && compositions.generatedAt) detailInlineParts.push(`состав ${formatDateTimeRu(compositions.generatedAt)}`);
   if (compositionStartedAt && compositionRefreshing) detailInlineParts.push(`состав старт ${formatDateTimeRu(compositionStartedAt)}`);
   if (compositionsNextRetryAt) detailInlineParts.push(`состав ретрай ${formatDateTimeRu(compositionsNextRetryAt)}`);
-  detailInlineParts.push(`Автослед: ${strategyRefreshing ? 'обновляется' : (strategyLastError ? 'ошибка' : 'ok')}`);
-  if (strategyGeneratedAt) detailInlineParts.push(`автослед обновлено ${formatDateTimeRu(strategyGeneratedAt)}`);
+  let strategyState = 'ok';
+  if (strategyRefreshing) strategyState = 'обновляется';
+  else if (strategyHardError) strategyState = 'ошибка';
+  else if (strategySoftError) strategyState = 'кэш, последняя попытка с ошибкой';
+  detailInlineParts.push(`Автослед: ${strategyState}`);
+  if (strategyGeneratedAt) detailInlineParts.push(`автослед ${formatDateTimeRu(strategyGeneratedAt)}`);
+  if (strategyLastRunFailed && strategyLastRun && strategyLastRun.finishedAt) {
+    detailInlineParts.push(`ошибка попытки ${formatDateTimeRu(strategyLastRun.finishedAt)}`);
+  }
 
   const secondLine = detailInlineParts.join(' · ');
-  el.textContent = secondLine ? `${text}\n${secondLine}` : text;
-  el.classList.toggle('refreshing', refreshing);
-  el.classList.toggle('stale', staleCount != null && staleCount > 0);
-  el.title = '';
+  if (mainEl && detailsEl) {
+    mainEl.textContent = text;
+    detailsEl.textContent = secondLine;
+  } else {
+    pillEl.textContent = secondLine ? `${text}\n${secondLine}` : text;
+  }
+
+  pillEl.classList.toggle('refreshing', refreshing);
+  pillEl.classList.toggle('stale', staleCount != null && staleCount > 0);
+  pillEl.title = '';
 }
 
 function getApiErrorMessage(payload, fallback = 'Ошибка запроса') {
@@ -2145,6 +2220,23 @@ function initTabStrategies() {
     renderSelectedStrategyChart();
   });
 
+  const modeToggle = document.getElementById('strategyModeToggle');
+  if (modeToggle) {
+    modeToggle.addEventListener('click', (event) => {
+      const btn = event.target.closest('button[data-mode]');
+      if (!btn) return;
+      const nextMode = btn.dataset.mode === 'net' ? 'net' : 'gross';
+      if (nextMode === strategyPerformanceMode) return;
+      strategyPerformanceMode = nextMode;
+      modeToggle.querySelectorAll('button[data-mode]').forEach((b) => {
+        b.classList.toggle('active', b.dataset.mode === strategyPerformanceMode);
+      });
+      renderStrategiesTable();
+      renderSelectedStrategyInfo();
+      renderSelectedStrategyChart();
+    });
+  }
+
   document.getElementById('strategyReloadBtn').addEventListener('click', () => {
     loadStrategiesData(true, { keepSelection: true });
   });
@@ -2214,8 +2306,8 @@ async function loadStrategiesData(forceRefresh = false, options = {}) {
 function compareStrategiesRows(a, b, col, dir) {
   const direction = dir === 'asc' ? 1 : -1;
   if (STRATEGY_NUMERIC_COLS.has(col)) {
-    const aNumRaw = a && Number.isFinite(Number(a[col])) ? Number(a[col]) : null;
-    const bNumRaw = b && Number.isFinite(Number(b[col])) ? Number(b[col]) : null;
+    const aNumRaw = getStrategyNumericValueByMode(a, col);
+    const bNumRaw = getStrategyNumericValueByMode(b, col);
     if (aNumRaw == null && bNumRaw == null) return 0;
     if (aNumRaw == null) return 1;
     if (bNumRaw == null) return -1;
@@ -2226,6 +2318,94 @@ function compareStrategiesRows(a, b, col, dir) {
   const aText = String((a && a[col]) || '');
   const bText = String((b && b[col]) || '');
   return direction * aText.localeCompare(bText, 'ru');
+}
+
+function getStrategyModeLabel() {
+  return strategyPerformanceMode === 'net' ? 'с комиссиями (оценка)' : 'без комиссий';
+}
+
+function getStrategyFeeProfile(item) {
+  const managementAnnualPct = toPercentValue(item && item.managementFeeText);
+  const performancePct = toPercentValue(item && item.resultFeeText);
+  return {
+    managementAnnualPct: Number.isFinite(managementAnnualPct) ? managementAnnualPct : null,
+    performancePct: Number.isFinite(performancePct) ? performancePct : null,
+  };
+}
+
+function getStrategyAllTimeYears(item) {
+  if (!item || !item.id) return 3;
+  const payload = strategyAnalyticsById.get(String(item.id));
+  const fromTs = Date.parse(String(payload && payload.interval && payload.interval.from ? payload.interval.from : ''));
+  const toTs = Date.parse(String(payload && payload.interval && payload.interval.to ? payload.interval.to : ''));
+  if (Number.isFinite(fromTs) && Number.isFinite(toTs) && toTs > fromTs) {
+    return Math.max(1 / 12, (toTs - fromTs) / (365.25 * 24 * 60 * 60 * 1000));
+  }
+
+  const allTimePct = Number(item && item.allTimeReturnPct);
+  const return12mPct = Number(item && item.return12mPct);
+  const allFactor = 1 + allTimePct / 100;
+  const yFactor = 1 + return12mPct / 100;
+  if (Number.isFinite(allFactor) && Number.isFinite(yFactor) && allFactor > 0 && yFactor > 0) {
+    const lnY = Math.log(yFactor);
+    if (Math.abs(lnY) > 1e-6) {
+      const estimated = Math.log(allFactor) / lnY;
+      if (Number.isFinite(estimated) && estimated > 0.2 && estimated < 15) {
+        return estimated;
+      }
+    }
+  }
+  return 3;
+}
+
+function applyStrategyFeesEstimate(grossPct, feeProfile, years) {
+  if (!Number.isFinite(Number(grossPct))) return null;
+  if (!feeProfile || strategyPerformanceMode !== 'net') return Number(grossPct);
+
+  const managementAnnualPct = Number(feeProfile.managementAnnualPct);
+  const performancePct = Number(feeProfile.performancePct);
+  const yearsSafe = Number.isFinite(Number(years)) && Number(years) > 0 ? Number(years) : 1;
+
+  let factor = 1 + Number(grossPct) / 100;
+  if (!Number.isFinite(factor) || factor <= 0) return Number(grossPct);
+
+  if (Number.isFinite(managementAnnualPct) && managementAnnualPct > 0) {
+    const managementRate = managementAnnualPct / 100;
+    factor *= Math.exp(-managementRate * yearsSafe);
+  }
+
+  let netPct = (factor - 1) * 100;
+  if (Number.isFinite(performancePct) && performancePct > 0 && netPct > 0) {
+    netPct *= Math.max(0, 1 - performancePct / 100);
+  }
+
+  return Number.isFinite(netPct) ? netPct : Number(grossPct);
+}
+
+function getStrategyReturnPctByMode(item, sourceField, periodYears) {
+  const raw = Number(item && item[sourceField]);
+  if (!Number.isFinite(raw)) return null;
+  if (strategyPerformanceMode !== 'net') return raw;
+
+  const years =
+    Number.isFinite(Number(periodYears))
+      ? Number(periodYears)
+      : sourceField === 'return12mPct'
+        ? 1
+        : getStrategyAllTimeYears(item);
+  return applyStrategyFeesEstimate(raw, getStrategyFeeProfile(item), years);
+}
+
+function getStrategyNumericValueByMode(item, col) {
+  if (!item || typeof item !== 'object') return null;
+  if (col === 'allTimeReturnPct') {
+    return getStrategyReturnPctByMode(item, 'allTimeReturnPct');
+  }
+  if (col === 'return12mPct') {
+    return getStrategyReturnPctByMode(item, 'return12mPct', 1);
+  }
+  const val = Number(item[col]);
+  return Number.isFinite(val) ? val : null;
 }
 
 function renderStrategyPctCell(value) {
@@ -2294,14 +2474,16 @@ function renderStrategiesTable() {
       const id = String(row.id || '');
       const selectedClass = id === String(strategiesSelectedId) ? ' selected' : '';
       const managedAmountText = formatManagedAmountText(row);
+      const allTimePct = getStrategyReturnPctByMode(row, 'allTimeReturnPct');
+      const return12mPct = getStrategyReturnPctByMode(row, 'return12mPct', 1);
       return `<tr data-id=\"${escapeAttr(id)}\" class=\"${selectedClass.trim()}\">
         <td class=\"name-cell\" title=\"${escapeAttr(row.title || '')}\">
           <div class=\"strategy-name\">${escapeHtml(row.title || '—')}</div>
           <div class=\"strategy-author\">${escapeHtml(row.ownerNickname || 'Автор не указан')}</div>
         </td>
         <td class=\"num\">${escapeHtml(fmtInteger(row.clients))}</td>
-        ${renderStrategyPctCell(row.allTimeReturnPct)}
-        ${renderStrategyPctCell(row.return12mPct)}
+        ${renderStrategyPctCell(allTimePct)}
+        ${renderStrategyPctCell(return12mPct)}
         <td class=\"num\">${escapeHtml(managedAmountText)}</td>
       </tr>`;
     }).join('');
@@ -2316,7 +2498,7 @@ function renderStrategiesTable() {
     const refreshing = Boolean(strategiesMeta && strategiesMeta.refreshing);
     const hasError = Boolean(strategiesMeta && strategiesMeta.lastError);
     summaryEl.textContent =
-      `Стратегий: ${rows.length} · Обновлено: ${updatedAt}` +
+      `Стратегий: ${rows.length} · Режим: ${getStrategyModeLabel()} · Обновлено: ${updatedAt}` +
       (refreshing ? ' · обновляем' : '') +
       (stale ? ' · кэш устарел, идет фоновое обновление' : '') +
       (hasError ? ' · были ошибки обновления' : '');
@@ -2376,10 +2558,14 @@ function renderSelectedStrategyInfo() {
       ? `${Math.round(Number(item.minAmountValue)).toLocaleString('ru-RU')} ₽`
       : '—';
   const managedAmountText = formatManagedAmountText(item);
+  const allTimeYears = getStrategyAllTimeYears(item);
+  const allTimeReturn = getStrategyReturnPctByMode(item, 'allTimeReturnPct', allTimeYears);
+  const return12m = getStrategyReturnPctByMode(item, 'return12mPct', 1);
+  const performanceTitleSuffix = strategyPerformanceMode === 'net' ? ' (нетто*)' : '';
 
   const metaRows = [
-    { label: 'Доходность, все время', value: signedPercentText(item.allTimeReturnPct, 1) },
-    { label: 'Доходность, 12м', value: signedPercentText(item.return12mPct, 1) },
+    { label: `Доходность, все время${performanceTitleSuffix}`, value: signedPercentText(allTimeReturn, 1) },
+    { label: `Доходность, 12м${performanceTitleSuffix}`, value: signedPercentText(return12m, 1) },
     { label: 'В управлении', value: managedAmountText },
     { label: 'Подписчиков', value: fmtInteger(item.clients) },
     { label: 'Мин. сумма', value: minAmountText },
@@ -2392,7 +2578,10 @@ function renderSelectedStrategyInfo() {
     .map((row) => `<div class=\"strategy-meta-item\"><span class=\"k\">${escapeHtml(row.label)}</span><span class=\"v\">${escapeHtml(row.value)}</span></div>`)
     .join('');
 
-  descEl.textContent = item.description || item.shortDescription || 'Описание недоступно.';
+  const modeHint = strategyPerformanceMode === 'net'
+    ? ' *Нетто-режим: оценка с учетом комиссии за управление и за результат (без налогов и брокерских издержек).'
+    : '';
+  descEl.textContent = `${item.description || item.shortDescription || 'Описание недоступно.'}${modeHint}`;
 
   const companies = item.portfolio && Array.isArray(item.portfolio.companies)
     ? item.portfolio.companies
@@ -2463,6 +2652,26 @@ function getStrategyPeriodLabel(period) {
   return map[period] || period;
 }
 
+function getStrategyPeriodYears(period, points) {
+  if (period === '1M') return 1 / 12;
+  if (period === '3M') return 0.25;
+  if (period === '6M') return 0.5;
+  if (period === '1Y') return 1;
+  if (period === 'MAX' && Array.isArray(points) && points.length > 1) {
+    const firstTs = Number.isFinite(Number(points[0].timestamp))
+      ? Number(points[0].timestamp)
+      : Date.parse(String(points[0].date || ''));
+    const last = points[points.length - 1];
+    const lastTs = Number.isFinite(Number(last.timestamp))
+      ? Number(last.timestamp)
+      : Date.parse(String(last.date || ''));
+    if (Number.isFinite(firstTs) && Number.isFinite(lastTs) && lastTs > firstTs) {
+      return Math.max(1 / 12, (lastTs - firstTs) / (365.25 * 24 * 60 * 60 * 1000));
+    }
+  }
+  return 1;
+}
+
 function renderStrategyBenchmarkTable() {
   const tableEl = document.getElementById('strategyBenchmarkTable');
   if (!tableEl) return;
@@ -2485,7 +2694,11 @@ function renderStrategyBenchmarkTable() {
   const periods = ['1M', '3M', '6M', '1Y', 'MAX'];
   const rowsHtml = periods.map((period) => {
     const periodPoints = period === 'MAX' ? allPoints : filterStrategyPointsByPeriod(allPoints, period);
-    const strategyPct = calcSeriesReturnPct(periodPoints, 'value');
+    const grossStrategyPct = calcSeriesReturnPct(periodPoints, 'value');
+    const periodYears = getStrategyPeriodYears(period, periodPoints);
+    const strategyPct = strategyPerformanceMode === 'net'
+      ? applyStrategyFeesEstimate(grossStrategyPct, getStrategyFeeProfile(item), periodYears)
+      : grossStrategyPct;
     const benchmarkPct = calcSeriesReturnPct(periodPoints, 'benchmarkValue');
     const alphaPct =
       Number.isFinite(Number(strategyPct)) && Number.isFinite(Number(benchmarkPct))
@@ -2509,7 +2722,7 @@ function renderStrategyBenchmarkTable() {
     <thead>
       <tr>
         <th>Период</th>
-        <th class="num">Стратегия</th>
+        <th class="num">Стратегия${strategyPerformanceMode === 'net' ? ' (нетто*)' : ''}</th>
         <th class="num">Бенчмарк</th>
         <th class="num">Альфа</th>
       </tr>
@@ -2598,6 +2811,10 @@ function renderSelectedStrategyChart() {
   }
 
   const baseValue = Number(firstValuePoint.value);
+  const startTsRaw = Number.isFinite(Number(firstValuePoint.timestamp))
+    ? Number(firstValuePoint.timestamp)
+    : Date.parse(String(firstValuePoint.date || firstValuePoint.time || ''));
+  const startTs = Number.isFinite(startTsRaw) ? startTsRaw : null;
   const firstBenchmarkPoint = points.find((row) => Number.isFinite(Number(row.benchmarkValue)));
   const baseBenchmark =
     firstBenchmarkPoint && Number.isFinite(Number(firstBenchmarkPoint.benchmarkValue))
@@ -2610,7 +2827,15 @@ function renderSelectedStrategyChart() {
       ? Number(row.timestamp)
       : Date.parse(String(row.date || row.time || ''));
     if (!Number.isFinite(value) || !Number.isFinite(xTs)) return null;
-    return { x: xTs, y: ((value / baseValue) - 1) * 100 };
+    const grossPct = ((value / baseValue) - 1) * 100;
+    if (strategyPerformanceMode !== 'net') {
+      return { x: xTs, y: grossPct };
+    }
+    const yearsFromStart = startTs != null
+      ? Math.max(0, (xTs - startTs) / (365.25 * 24 * 60 * 60 * 1000))
+      : 1;
+    const netPct = applyStrategyFeesEstimate(grossPct, getStrategyFeeProfile(item), yearsFromStart);
+    return { x: xTs, y: Number.isFinite(Number(netPct)) ? Number(netPct) : grossPct };
   }).filter(Boolean);
 
   const benchmarkSeries = (baseBenchmark != null && baseBenchmark !== 0)
@@ -2634,7 +2859,8 @@ function renderSelectedStrategyChart() {
   const perfText = signedPercentText(lastValue, 2);
   const titleEl = document.getElementById('strategyChartTitle');
   if (titleEl) {
-    titleEl.textContent = `Динамика (${strategyPeriod}) от начала периода: ${perfText}`;
+    const modeText = strategyPerformanceMode === 'net' ? ' · нетто*' : '';
+    titleEl.textContent = `Динамика (${strategyPeriod}) от начала периода: ${perfText}${modeText}`;
   }
 
   if (strategyChart) strategyChart.destroy();
@@ -2648,7 +2874,9 @@ function renderSelectedStrategyChart() {
 
   const datasets = [
     {
-      label: item.title || 'Стратегия',
+      label: strategyPerformanceMode === 'net'
+        ? `${item.title || 'Стратегия'} (нетто*)`
+        : (item.title || 'Стратегия'),
       data: strategySeries,
       borderColor: strategyColor,
       backgroundColor: hexToRgba(strategyColor, 0.12),
