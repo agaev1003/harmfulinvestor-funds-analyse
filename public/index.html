@@ -74,7 +74,7 @@ body {
 }
 .update-pill {
   display: inline-flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
   padding: 5px 10px;
   border: 1px solid var(--border);
@@ -82,8 +82,10 @@ body {
   background: rgba(255, 18, 61, 0.08);
   color: var(--text-secondary);
   font-size: 12px;
-  line-height: 1;
-  white-space: nowrap;
+  line-height: 1.25;
+  white-space: pre-line;
+  text-align: left;
+  max-width: min(72vw, 1320px);
 }
 .update-pill.refreshing {
   border-color: #b27c1e;
@@ -1748,22 +1750,23 @@ function updateGlobalStatusPill(statusPayload) {
   }
   if (refreshing) text += ' · обновляем';
 
-  el.textContent = text;
+  const detailInlineParts = [];
+  detailInlineParts.push(`Рынок: ${marketRefreshing ? 'обновляется' : (marketLastError ? 'ошибка' : 'ok')}`);
+  if (updatedAt) detailInlineParts.push(`рынок обновлено ${formatDateTimeRu(updatedAt)}`);
+  if (marketStartedAt && marketRefreshing) detailInlineParts.push(`рынок старт ${formatDateTimeRu(marketStartedAt)}`);
+  if (marketNextRetryAt) detailInlineParts.push(`рынок ретрай ${formatDateTimeRu(marketNextRetryAt)}`);
+  detailInlineParts.push(`Состав: ${compositionRefreshing ? 'обновляется' : (lastError ? 'ошибка' : 'ok')}`);
+  if (compositions && compositions.generatedAt) detailInlineParts.push(`состав обновлено ${formatDateTimeRu(compositions.generatedAt)}`);
+  if (compositionStartedAt && compositionRefreshing) detailInlineParts.push(`состав старт ${formatDateTimeRu(compositionStartedAt)}`);
+  if (compositionsNextRetryAt) detailInlineParts.push(`состав ретрай ${formatDateTimeRu(compositionsNextRetryAt)}`);
+  detailInlineParts.push(`Автослед: ${strategyRefreshing ? 'обновляется' : (strategyLastError ? 'ошибка' : 'ok')}`);
+  if (strategyGeneratedAt) detailInlineParts.push(`автослед обновлено ${formatDateTimeRu(strategyGeneratedAt)}`);
+
+  const secondLine = detailInlineParts.join(' · ');
+  el.textContent = secondLine ? `${text}\n${secondLine}` : text;
   el.classList.toggle('refreshing', refreshing);
   el.classList.toggle('stale', staleCount != null && staleCount > 0);
-
-  const detailLines = [];
-  detailLines.push(`Рынок: ${marketRefreshing ? 'обновляется' : (marketLastError ? 'ошибка' : 'ok')}`);
-  if (updatedAt) detailLines.push(`Рынок обновлено: ${formatDateTimeRu(updatedAt)}`);
-  if (marketStartedAt && marketRefreshing) detailLines.push(`Рынок старт обновления: ${formatDateTimeRu(marketStartedAt)}`);
-  if (marketNextRetryAt) detailLines.push(`Рынок следующий ретрай: ${formatDateTimeRu(marketNextRetryAt)}`);
-  detailLines.push(`Состав: ${compositionRefreshing ? 'обновляется' : (lastError ? 'ошибка' : 'ok')}`);
-  if (compositions && compositions.generatedAt) detailLines.push(`Состав обновлено: ${formatDateTimeRu(compositions.generatedAt)}`);
-  if (compositionStartedAt && compositionRefreshing) detailLines.push(`Состав старт обновления: ${formatDateTimeRu(compositionStartedAt)}`);
-  if (compositionsNextRetryAt) detailLines.push(`Состав следующий ретрай: ${formatDateTimeRu(compositionsNextRetryAt)}`);
-  detailLines.push(`Автоследование: ${strategyRefreshing ? 'обновляется' : (strategyLastError ? 'ошибка' : 'ok')}`);
-  if (strategyGeneratedAt) detailLines.push(`Автослед обновлено: ${formatDateTimeRu(strategyGeneratedAt)}`);
-  el.title = detailLines.join('\n');
+  el.title = '';
 }
 
 function getApiErrorMessage(payload, fallback = 'Ошибка запроса') {
