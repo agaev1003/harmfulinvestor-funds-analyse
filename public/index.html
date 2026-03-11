@@ -2325,10 +2325,10 @@ function getStrategyModeLabel() {
 }
 
 function getStrategyFeeProfile(item) {
-  const managementAnnualPct = toPercentValue(item && item.managementFeeText);
+  const managementMonthlyPct = toPercentValue(item && item.managementFeeText);
   const performancePct = toPercentValue(item && item.resultFeeText);
   return {
-    managementAnnualPct: Number.isFinite(managementAnnualPct) ? managementAnnualPct : null,
+    managementMonthlyPct: Number.isFinite(managementMonthlyPct) ? managementMonthlyPct : null,
     performancePct: Number.isFinite(performancePct) ? performancePct : null,
   };
 }
@@ -2362,23 +2362,41 @@ function applyStrategyFeesEstimate(grossPct, feeProfile, years) {
   if (!Number.isFinite(Number(grossPct))) return null;
   if (!feeProfile || strategyPerformanceMode !== 'net') return Number(grossPct);
 
-  const managementAnnualPct = Number(feeProfile.managementAnnualPct);
+  const managementMonthlyPct = Number(feeProfile.managementMonthlyPct);
   const performancePct = Number(feeProfile.performancePct);
-  const yearsSafe = Number.isFinite(Number(years)) && Number(years) > 0 ? Number(years) : 1;
+  const yearsSafe = Number.isFinite(Number(years)) && Number(years) > 0
+    ? Number(years)
+    : 1;
 
-  let factor = 1 + Number(grossPct) / 100;
-  if (!Number.isFinite(factor) || factor <= 0) return Number(grossPct);
+  const grossFactor = 1 + Number(grossPct) / 100;
+  if (!Number.isFinite(grossFactor) || grossFactor <= 0) return Number(grossPct);
+  const months = Math.max(1, Math.round(yearsSafe * 12));
+  const grossMonthlyFactor = Math.pow(grossFactor, 1 / months);
+  const managementRateMonthly = Number.isFinite(managementMonthlyPct) && managementMonthlyPct > 0
+    ? managementMonthlyPct / 100
+    : 0;
+  const performanceRate = Number.isFinite(performancePct) && performancePct > 0
+    ? Math.min(1, performancePct / 100)
+    : 0;
 
-  if (Number.isFinite(managementAnnualPct) && managementAnnualPct > 0) {
-    const managementRate = managementAnnualPct / 100;
-    factor *= Math.exp(-managementRate * yearsSafe);
+  let net = 1;
+  let hwm = 1;
+  for (let i = 0; i < months; i += 1) {
+    net *= grossMonthlyFactor;
+    if (managementRateMonthly > 0) {
+      net *= Math.max(0, 1 - managementRateMonthly);
+    }
+    if (net > hwm) {
+      const monthHigh = net;
+      if (performanceRate > 0) {
+        const fee = (net - hwm) * performanceRate;
+        net -= fee;
+      }
+      hwm = Math.max(hwm, monthHigh);
+    }
   }
 
-  let netPct = (factor - 1) * 100;
-  if (Number.isFinite(performancePct) && performancePct > 0 && netPct > 0) {
-    netPct *= Math.max(0, 1 - performancePct / 100);
-  }
-
+  const netPct = (net - 1) * 100;
   return Number.isFinite(netPct) ? netPct : Number(grossPct);
 }
 
@@ -2406,6 +2424,85 @@ function getStrategyNumericValueByMode(item, col) {
   }
   const val = Number(item[col]);
   return Number.isFinite(val) ? val : null;
+}
+
+function monthKeyFromTimestamp(ts) {
+  const d = new Date(ts);
+  if (!Number.isFinite(d.getTime())) return '';
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function buildStrategyNetSeriesFromPoints(points, item) {
+  if (!Array.isArray(points) || points.length < 1) return [];
+  const normalized = points
+    .map((row) => {
+      const value = Number(row && row.value);
+      const benchmarkValue = Number(row && row.benchmarkValue);
+      const tsRaw = Number.isFinite(Number(row && row.timestamp))
+        ? Number(row.timestamp)
+        : Date.parse(String(row && row.date ? row.date : ''));
+      if (!Number.isFinite(value) || !Number.isFinite(tsRaw)) return null;
+      return {
+        ...row,
+        value,
+        benchmarkValue: Number.isFinite(benchmarkValue) ? benchmarkValue : null,
+        timestamp: tsRaw,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.timestamp - b.timestamp);
+
+  if (!normalized.length) return [];
+  if (strategyPerformanceMode !== 'net') {
+    return normalized.map((row) => ({ ...row, netValue: row.value }));
+  }
+
+  const feeProfile = getStrategyFeeProfile(item);
+  const managementRateMonthly =
+    Number.isFinite(Number(feeProfile.managementMonthlyPct)) && Number(feeProfile.managementMonthlyPct) > 0
+      ? Number(feeProfile.managementMonthlyPct) / 100
+      : 0;
+  const managementDailyFactor = managementRateMonthly > 0
+    ? Math.max(0, 1 - managementRateMonthly / 30)
+    : 1;
+  const performanceRate =
+    Number.isFinite(Number(feeProfile.performancePct)) && Number(feeProfile.performancePct) > 0
+      ? Math.min(1, Number(feeProfile.performancePct) / 100)
+      : 0;
+
+  let netValue = 1;
+  let hwm = 1;
+  const out = [];
+
+  const first = normalized[0];
+  out.push({ ...first, netValue });
+
+  for (let i = 1; i < normalized.length; i += 1) {
+    const prev = normalized[i - 1];
+    const cur = normalized[i];
+
+    if (monthKeyFromTimestamp(prev.timestamp) !== monthKeyFromTimestamp(cur.timestamp)) {
+      if (netValue > hwm) {
+        const monthHigh = netValue;
+        if (performanceRate > 0) {
+          netValue -= (netValue - hwm) * performanceRate;
+        }
+        hwm = Math.max(hwm, monthHigh);
+      }
+    }
+
+    if (prev.value > 0) {
+      netValue *= cur.value / prev.value;
+    }
+    const daysPassed = Math.max(0, Math.round((cur.timestamp - prev.timestamp) / 86400000));
+    if (daysPassed > 0 && managementDailyFactor < 1) {
+      netValue *= Math.pow(managementDailyFactor, daysPassed);
+    }
+
+    out.push({ ...cur, netValue });
+  }
+
+  return out;
 }
 
 function renderStrategyPctCell(value) {
@@ -2652,26 +2749,6 @@ function getStrategyPeriodLabel(period) {
   return map[period] || period;
 }
 
-function getStrategyPeriodYears(period, points) {
-  if (period === '1M') return 1 / 12;
-  if (period === '3M') return 0.25;
-  if (period === '6M') return 0.5;
-  if (period === '1Y') return 1;
-  if (period === 'MAX' && Array.isArray(points) && points.length > 1) {
-    const firstTs = Number.isFinite(Number(points[0].timestamp))
-      ? Number(points[0].timestamp)
-      : Date.parse(String(points[0].date || ''));
-    const last = points[points.length - 1];
-    const lastTs = Number.isFinite(Number(last.timestamp))
-      ? Number(last.timestamp)
-      : Date.parse(String(last.date || ''));
-    if (Number.isFinite(firstTs) && Number.isFinite(lastTs) && lastTs > firstTs) {
-      return Math.max(1 / 12, (lastTs - firstTs) / (365.25 * 24 * 60 * 60 * 1000));
-    }
-  }
-  return 1;
-}
-
 function renderStrategyBenchmarkTable() {
   const tableEl = document.getElementById('strategyBenchmarkTable');
   if (!tableEl) return;
@@ -2691,14 +2768,16 @@ function renderStrategyBenchmarkTable() {
     return;
   }
 
+  const pointsForCalc = buildStrategyNetSeriesFromPoints(allPoints, item);
   const periods = ['1M', '3M', '6M', '1Y', 'MAX'];
   const rowsHtml = periods.map((period) => {
-    const periodPoints = period === 'MAX' ? allPoints : filterStrategyPointsByPeriod(allPoints, period);
-    const grossStrategyPct = calcSeriesReturnPct(periodPoints, 'value');
-    const periodYears = getStrategyPeriodYears(period, periodPoints);
-    const strategyPct = strategyPerformanceMode === 'net'
-      ? applyStrategyFeesEstimate(grossStrategyPct, getStrategyFeeProfile(item), periodYears)
-      : grossStrategyPct;
+    const periodPoints = period === 'MAX'
+      ? pointsForCalc
+      : filterStrategyPointsByPeriod(pointsForCalc, period);
+    const strategyPct = calcSeriesReturnPct(
+      periodPoints,
+      strategyPerformanceMode === 'net' ? 'netValue' : 'value'
+    );
     const benchmarkPct = calcSeriesReturnPct(periodPoints, 'benchmarkValue');
     const alphaPct =
       Number.isFinite(Number(strategyPct)) && Number.isFinite(Number(benchmarkPct))
@@ -2796,25 +2875,27 @@ function renderSelectedStrategyChart() {
 
   const payload = strategyAnalyticsById.get(String(strategiesSelectedId));
   const allPoints = payload && Array.isArray(payload.points) ? payload.points : [];
-  const points = filterStrategyPointsByPeriod(allPoints, strategyPeriod);
+  const pointsWithNet = buildStrategyNetSeriesFromPoints(allPoints, item);
+  const points = filterStrategyPointsByPeriod(pointsWithNet, strategyPeriod);
   if (!points.length) {
     setStrategyChartPlaceholder(`Динамика: ${item.title || '—'} · нет данных`);
     renderStrategyBenchmarkTable();
     return;
   }
 
-  const firstValuePoint = points.find((row) => Number.isFinite(Number(row.value)));
-  if (!firstValuePoint || !Number.isFinite(Number(firstValuePoint.value)) || Number(firstValuePoint.value) === 0) {
+  const selectedValueKey = strategyPerformanceMode === 'net' ? 'netValue' : 'value';
+  const firstValuePoint = points.find((row) => Number.isFinite(Number(row[selectedValueKey])));
+  if (
+    !firstValuePoint ||
+    !Number.isFinite(Number(firstValuePoint[selectedValueKey])) ||
+    Number(firstValuePoint[selectedValueKey]) === 0
+  ) {
     setStrategyChartPlaceholder(`Динамика: ${item.title || '—'} · нет данных`);
     renderStrategyBenchmarkTable();
     return;
   }
 
-  const baseValue = Number(firstValuePoint.value);
-  const startTsRaw = Number.isFinite(Number(firstValuePoint.timestamp))
-    ? Number(firstValuePoint.timestamp)
-    : Date.parse(String(firstValuePoint.date || firstValuePoint.time || ''));
-  const startTs = Number.isFinite(startTsRaw) ? startTsRaw : null;
+  const baseValue = Number(firstValuePoint[selectedValueKey]);
   const firstBenchmarkPoint = points.find((row) => Number.isFinite(Number(row.benchmarkValue)));
   const baseBenchmark =
     firstBenchmarkPoint && Number.isFinite(Number(firstBenchmarkPoint.benchmarkValue))
@@ -2822,20 +2903,12 @@ function renderSelectedStrategyChart() {
       : null;
 
   const strategySeries = points.map((row) => {
-    const value = Number(row.value);
+    const value = Number(row[selectedValueKey]);
     const xTs = Number.isFinite(Number(row.timestamp))
       ? Number(row.timestamp)
       : Date.parse(String(row.date || row.time || ''));
     if (!Number.isFinite(value) || !Number.isFinite(xTs)) return null;
-    const grossPct = ((value / baseValue) - 1) * 100;
-    if (strategyPerformanceMode !== 'net') {
-      return { x: xTs, y: grossPct };
-    }
-    const yearsFromStart = startTs != null
-      ? Math.max(0, (xTs - startTs) / (365.25 * 24 * 60 * 60 * 1000))
-      : 1;
-    const netPct = applyStrategyFeesEstimate(grossPct, getStrategyFeeProfile(item), yearsFromStart);
-    return { x: xTs, y: Number.isFinite(Number(netPct)) ? Number(netPct) : grossPct };
+    return { x: xTs, y: ((value / baseValue) - 1) * 100 };
   }).filter(Boolean);
 
   const benchmarkSeries = (baseBenchmark != null && baseBenchmark !== 0)
