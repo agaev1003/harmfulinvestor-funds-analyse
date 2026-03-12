@@ -234,6 +234,8 @@ function sanitizeStatusPayload(payload, strategiesSummary) {
     market: {
       generatedAt: market.generatedAt || null,
       generatedAgeDays: toSafeNumber(market.generatedAgeDays),
+      latestDataDate: market.latestDataDate || null,
+      latestDataAgeDays: toSafeNumber(market.latestDataAgeDays),
       refreshing: toSafeBool(market.refreshing),
       failedFunds: Number(market.failedFunds) || 0,
       failedHistoryBatches: Number(market.failedHistoryBatches) || 0,

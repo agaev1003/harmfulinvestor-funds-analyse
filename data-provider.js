@@ -178,6 +178,18 @@ function ageDaysFromTimestamp(value, nowMs = Date.now()) {
   return Math.max(0, Math.floor((nowMs - ts) / 86_400_000));
 }
 
+function getLatestMarketDataDate(dataset) {
+  const funds = dataset && Array.isArray(dataset.funds) ? dataset.funds : [];
+  let latest = null;
+  for (const fund of funds) {
+    const date = String(fund && fund.latest_date ? fund.latest_date : "").trim();
+    if (!date) continue;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    if (!latest || date > latest) latest = date;
+  }
+  return latest;
+}
+
 function mskDate(value = new Date()) {
   return DATE_FMT_MSK.format(value);
 }
@@ -2349,6 +2361,8 @@ async function getStatusSummary() {
       : mainDs && mainDs.buildStats && typeof mainDs.buildStats === "object"
         ? mainDs.buildStats
         : null;
+  const marketLatestDataDate = getLatestMarketDataDate(mainDs);
+  const marketLatestDataAgeDays = ageDaysFromIsoDate(marketLatestDataDate);
 
   return {
     ok: true,
@@ -2365,6 +2379,8 @@ async function getStatusSummary() {
     market: {
       generatedAt: mainGeneratedAt,
       generatedAgeDays: mainAgeDays,
+      latestDataDate: marketLatestDataDate,
+      latestDataAgeDays: marketLatestDataAgeDays,
       refreshing: Boolean(state.buildPromise),
       progress: marketBuildState
         ? {

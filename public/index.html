@@ -96,6 +96,7 @@ body {
   color: var(--text-secondary);
   opacity: 0.92;
   font-size: 11px;
+  white-space: pre-line;
 }
 .update-pill.refreshing {
   border-color: #b27c1e;
@@ -1010,7 +1011,7 @@ body {
   <button class="tab-btn strategies-tab" data-tab="strategies">Автоследование</button>
   <div class="top-right-status">
     <span class="update-pill" id="globalUpdateStatus">
-      <span class="update-pill-main" id="globalUpdateStatusMain">Обновление: --</span>
+      <span class="update-pill-main" id="globalUpdateStatusMain">Обновлено: --</span>
       <span class="update-pill-details" id="globalUpdateStatusDetails"></span>
     </span>
   </div>
@@ -1632,6 +1633,18 @@ function updateGlobalStatusPill(statusPayload) {
   const strategies = statusPayload && statusPayload.strategies
     ? statusPayload.strategies
     : null;
+
+  const updatedAt =
+    (market && market.generatedAt) ||
+    (statusPayload && statusPayload.generatedAt) ||
+    null;
+  const marketLatestDataDate =
+    (market && market.latestDataDate) || null;
+  const compositionsLatestDate =
+    (compositions && compositions.latestStructureDate) || null;
+  const strategyUpdatedAt =
+    (strategies && strategies.generatedAt) || null;
+
   const staleMarkDays = Number(
     (compositions && compositions.staleMarkDays) ||
     (statusPayload && statusPayload.staleMarkDays) ||
@@ -1639,69 +1652,7 @@ function updateGlobalStatusPill(statusPayload) {
   );
   const staleCountRaw = compositions && compositions.staleCount;
   const staleCount = Number.isFinite(Number(staleCountRaw)) ? Number(staleCountRaw) : null;
-  // Primary "updated at" should reflect market dataset timestamp (main tabs),
-  // compositions timestamp is secondary and displayed via progress/errors below.
-  const updatedAt =
-    (statusPayload && statusPayload.generatedAt) ||
-    (market && market.generatedAt) ||
-    (compositions && compositions.generatedAt) ||
-    null;
 
-  const progress = (compositions && compositions.progress && typeof compositions.progress === 'object')
-    ? compositions.progress
-    : null;
-  const progressTotalRaw = progress && progress.candidateTotal;
-  const progressDoneRaw = progress && progress.processed;
-  const progressTotal = Number.isFinite(Number(progressTotalRaw)) ? Number(progressTotalRaw) : null;
-  const progressDone = Number.isFinite(Number(progressDoneRaw)) ? Number(progressDoneRaw) : null;
-  const marketProgress = (market && market.progress && typeof market.progress === 'object')
-    ? market.progress
-    : null;
-  const marketDetailsTotalRaw = marketProgress && marketProgress.detailsTotal;
-  const marketDetailsDoneRaw = marketProgress && marketProgress.detailsProcessed;
-  const marketDetailsTotal = Number.isFinite(Number(marketDetailsTotalRaw))
-    ? Number(marketDetailsTotalRaw)
-    : null;
-  const marketDetailsDone = Number.isFinite(Number(marketDetailsDoneRaw))
-    ? Number(marketDetailsDoneRaw)
-    : null;
-  const marketHistoryTotalRaw = marketProgress && marketProgress.historyBatchesTotal;
-  const marketHistoryDoneRaw = marketProgress && marketProgress.historyBatchesDone;
-  const marketHistoryTotal = Number.isFinite(Number(marketHistoryTotalRaw))
-    ? Number(marketHistoryTotalRaw)
-    : null;
-  const marketHistoryDone = Number.isFinite(Number(marketHistoryDoneRaw))
-    ? Number(marketHistoryDoneRaw)
-    : null;
-
-  const failedFundsRaw = (progress && progress.failedCount != null)
-    ? progress.failedCount
-    : (compositions && compositions.failedFunds);
-  const failedFunds = Number.isFinite(Number(failedFundsRaw)) ? Number(failedFundsRaw) : 0;
-  const marketFailedFundsRaw = market && market.failedFunds;
-  const marketFailedFunds = Number.isFinite(Number(marketFailedFundsRaw))
-    ? Number(marketFailedFundsRaw)
-    : 0;
-  const marketFailedBatchesRaw = market && market.failedHistoryBatches;
-  const marketFailedBatches = Number.isFinite(Number(marketFailedBatchesRaw))
-    ? Number(marketFailedBatchesRaw)
-    : 0;
-  const marketFailedListPagesRaw = market && market.failedListPages;
-  const marketFailedListPages = Number.isFinite(Number(marketFailedListPagesRaw))
-    ? Number(marketFailedListPagesRaw)
-    : 0;
-  const lastError = (compositions && compositions.lastError)
-    ? String(compositions.lastError)
-    : '';
-  const marketLastError = (market && market.lastError)
-    ? String(market.lastError)
-    : '';
-  const marketNextRetryAt = market && market.nextRetryAt
-    ? String(market.nextRetryAt)
-    : '';
-  const compositionsNextRetryAt = compositions && compositions.nextRetryAt
-    ? String(compositions.nextRetryAt)
-    : '';
   const marketRefreshing = Boolean(
     statusPayload && statusPayload.refreshing && statusPayload.refreshing.market
   );
@@ -1712,117 +1663,47 @@ function updateGlobalStatusPill(statusPayload) {
 
   const strategyRefreshing = Boolean(strategies && strategies.refreshing);
   const strategyLastErrorFlag = Boolean(strategies && strategies.lastError);
-  const strategyLastRun =
-    strategies && strategies.lastRun && typeof strategies.lastRun === 'object'
-      ? strategies.lastRun
-      : null;
-  const strategyLastRunFailed = Boolean(strategyLastRun && strategyLastRun.ok === false);
-  const strategyGeneratedAt = strategies && strategies.generatedAt ? String(strategies.generatedAt) : '';
-  const strategySoftError = Boolean(strategyLastErrorFlag && strategyGeneratedAt);
-  const strategyHardError = Boolean(strategyLastErrorFlag && !strategyGeneratedAt);
+  const strategySoftError = Boolean(strategyLastErrorFlag && strategyUpdatedAt);
+  const strategyHardError = Boolean(strategyLastErrorFlag && !strategyUpdatedAt);
+  const marketHasError = Boolean(market && market.lastError);
+  const compositionHasError = Boolean(compositions && compositions.lastError);
 
   const refreshing = Boolean(
-    (statusPayload && statusPayload.refreshing &&
-      (statusPayload.refreshing.market || statusPayload.refreshing.compositions)) ||
-    (compositions && compositions.refreshing) ||
+    marketRefreshing ||
+    compositionRefreshing ||
     strategyRefreshing
   );
 
-  let text = `Обновлено: ${updatedAt ? formatDateTimeRu(updatedAt) : '--'}`;
-  if (staleCount != null) text += ` · ${staleMarkDays}+д: ${staleCount}`;
-  const progressParts = [];
-  if (marketRefreshing) {
-    if (marketDetailsTotal != null && marketDetailsDone != null && marketDetailsTotal > 0) {
-      progressParts.push(`рынок ${Math.min(marketDetailsDone, marketDetailsTotal)}/${marketDetailsTotal}`);
-    } else if (marketHistoryTotal != null && marketHistoryDone != null && marketHistoryTotal > 0) {
-      progressParts.push(`история ${Math.min(marketHistoryDone, marketHistoryTotal)}/${marketHistoryTotal}`);
-    } else {
-      progressParts.push('рынок');
-    }
-  }
-  if (compositionRefreshing) {
-    if (progressTotal != null && progressDone != null && progressTotal > 0) {
-      progressParts.push(`состав ${Math.min(progressDone, progressTotal)}/${progressTotal}`);
-    } else {
-      progressParts.push('состав');
-    }
-  }
-  if (progressParts.length) text += ` · ${progressParts.join(' · ')}`;
+  const marketAgeDays = Number.isFinite(Number(market && market.latestDataAgeDays))
+    ? Number(market.latestDataAgeDays)
+    : Number.isFinite(Number(statusPayload && statusPayload.generatedAgeDays))
+      ? Number(statusPayload.generatedAgeDays)
+      : null;
 
-  const marketAgeDays = Number.isFinite(Number(statusPayload && statusPayload.generatedAgeDays))
-    ? Number(statusPayload.generatedAgeDays)
-    : null;
-  if (marketAgeDays != null && marketAgeDays >= 2) {
-    text += ` · рынок старый: ${marketAgeDays}д`;
-  }
+  let line1 = `Обновлено: ${updatedAt ? formatDateTimeRu(updatedAt) : '--'}`;
+  if (refreshing) line1 += ' · сейчас обновляем';
 
-  const marketStartedAt = marketProgress && marketProgress.startedAt
-    ? String(marketProgress.startedAt)
-    : '';
-  const compositionStartedAt = progress && progress.startedAt
-    ? String(progress.startedAt)
-    : '';
-  const marketRefreshMins = marketRefreshing
-    ? Math.floor((Date.now() - Date.parse(marketStartedAt || '')) / 60_000)
-    : null;
-  const compositionRefreshMins = compositionRefreshing
-    ? Math.floor((Date.now() - Date.parse(compositionStartedAt || '')) / 60_000)
-    : null;
-  if (marketRefreshing && Number.isFinite(marketRefreshMins) && marketRefreshMins >= 20) {
-    text += ` · рынок обновляется долго (${marketRefreshMins}м)`;
-  }
-  if (compositionRefreshing && Number.isFinite(compositionRefreshMins) && compositionRefreshMins >= 20) {
-    text += ` · состав обновляется долго (${compositionRefreshMins}м)`;
-  }
+  const marketChangesText = marketLatestDataDate ? formatDateHuman(marketLatestDataDate) : '--';
+  const compositionChangesText = compositionsLatestDate ? formatDateHuman(compositionsLatestDate) : '--';
+  let line2 = `Последние изменения: рынок ${marketChangesText} · состав ${compositionChangesText}`;
+  if (staleCount != null) line2 += ` · фондов ${staleMarkDays}+д: ${staleCount}`;
+  if (marketAgeDays != null && marketAgeDays >= 2) line2 += ` · рынок не обновлялся ${marketAgeDays}д`;
 
-  if (marketFailedFunds > 0) text += ` · рынок ошибок фондов: ${marketFailedFunds}`;
-  if (marketFailedBatches > 0) text += ` · рынок батч-ошибок: ${marketFailedBatches}`;
-  if (marketFailedListPages > 0) text += ` · рынок страниц-ошибок: ${marketFailedListPages}`;
-  if (failedFunds > 0) text += ` · ошибок фондов: ${failedFunds}`;
-  if (marketLastError) text += ' · ошибка обновления рынка';
-  if (lastError) text += ' · ошибка обновления состава';
-  if (strategyRefreshing) {
-    text += ' · автослед обновляем';
-  } else if (strategyHardError) {
-    text += ' · автослед: ошибка';
-  } else if (strategySoftError) {
-    text += ' · автослед: кэш (посл. попытка с ошибкой)';
-  }
-  const nextRetryTs = Math.max(
-    Date.parse(marketNextRetryAt || ''),
-    Date.parse(compositionsNextRetryAt || '')
-  );
-  if (!refreshing && Number.isFinite(nextRetryTs) && nextRetryTs > Date.now()) {
-    const mins = Math.max(1, Math.ceil((nextRetryTs - Date.now()) / 60_000));
-    text += ` · пауза до ретрая ~${mins}м`;
-  }
-  if (refreshing) text += ' · обновляем';
-
-  const detailInlineParts = [];
-  detailInlineParts.push(`Рынок: ${marketRefreshing ? 'обновляется' : (marketLastError ? 'ошибка' : 'ok')}`);
-  if (updatedAt) detailInlineParts.push(`рынок ${formatDateTimeRu(updatedAt)}`);
-  if (marketStartedAt && marketRefreshing) detailInlineParts.push(`рынок старт ${formatDateTimeRu(marketStartedAt)}`);
-  if (marketNextRetryAt) detailInlineParts.push(`рынок ретрай ${formatDateTimeRu(marketNextRetryAt)}`);
-  detailInlineParts.push(`Состав: ${compositionRefreshing ? 'обновляется' : (lastError ? 'ошибка' : 'ok')}`);
-  if (compositions && compositions.generatedAt) detailInlineParts.push(`состав ${formatDateTimeRu(compositions.generatedAt)}`);
-  if (compositionStartedAt && compositionRefreshing) detailInlineParts.push(`состав старт ${formatDateTimeRu(compositionStartedAt)}`);
-  if (compositionsNextRetryAt) detailInlineParts.push(`состав ретрай ${formatDateTimeRu(compositionsNextRetryAt)}`);
-  let strategyState = 'ok';
+  const marketState = marketRefreshing ? 'обновляется' : (marketHasError ? 'ошибка' : 'актуально');
+  const compositionState = compositionRefreshing ? 'обновляется' : (compositionHasError ? 'ошибка' : 'актуально');
+  let strategyState = 'актуально';
   if (strategyRefreshing) strategyState = 'обновляется';
   else if (strategyHardError) strategyState = 'ошибка';
-  else if (strategySoftError) strategyState = 'кэш, последняя попытка с ошибкой';
-  detailInlineParts.push(`Автослед: ${strategyState}`);
-  if (strategyGeneratedAt) detailInlineParts.push(`автослед ${formatDateTimeRu(strategyGeneratedAt)}`);
-  if (strategyLastRunFailed && strategyLastRun && strategyLastRun.finishedAt) {
-    detailInlineParts.push(`ошибка попытки ${formatDateTimeRu(strategyLastRun.finishedAt)}`);
-  }
+  else if (strategySoftError) strategyState = 'временная ошибка, показываем кэш';
 
-  const secondLine = detailInlineParts.join(' · ');
+  const strategyUpdatedText = strategyUpdatedAt ? formatDateTimeRu(strategyUpdatedAt) : '--';
+  const line3 = `Статус: рынок ${marketState} · состав ${compositionState} · автослед ${strategyState} (${strategyUpdatedText})`;
+
   if (mainEl && detailsEl) {
-    mainEl.textContent = text;
-    detailsEl.textContent = secondLine;
+    mainEl.textContent = line1;
+    detailsEl.textContent = `${line2}\n${line3}`;
   } else {
-    pillEl.textContent = secondLine ? `${text}\n${secondLine}` : text;
+    pillEl.textContent = `${line1}\n${line2}\n${line3}`;
   }
 
   pillEl.classList.toggle('refreshing', refreshing);
