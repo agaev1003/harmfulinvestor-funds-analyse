@@ -1,0 +1,37 @@
+{
+  "source": "https://www.tbank.ru/invest/strategies/",
+  "generatedAt": "2026-03-12T10:37:00.000Z",
+  "total": 1,
+  "activeCount": 1,
+  "tabCount": 3,
+  "failedDetailsCount": 0,
+  "items": [
+    {
+      "id": "fixture-strategy-1",
+      "title": "Тестовая стратегия",
+      "status": "active",
+      "ownerNickname": "Тестовый автор",
+      "clients": 123,
+      "allTimeReturnPct": 25.7,
+      "return12mPct": 7.3,
+      "managedAmountText": "до 100 млн. ₽",
+      "managedAmountValue": 100000000,
+      "minAmountText": "12 000 ₽",
+      "minAmountValue": 12000,
+      "riskLabel": "Агрессивный",
+      "feesText": "Упр: 0,333% · Рез: 20,0% · Брок: Нет",
+      "portfolio": {
+        "types": [],
+        "sectors": [],
+        "companies": []
+      },
+      "topPositions": [],
+      "recentDeals": [],
+      "tabs": [
+        "all"
+      ],
+      "tags": [],
+      "url": "https://www.tbank.ru/invest/strategies/fixture-strategy-1"
+    }
+  ]
+}

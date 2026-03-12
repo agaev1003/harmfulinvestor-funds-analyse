@@ -264,6 +264,7 @@ function sanitizeStatusPayload(payload, strategiesSummary) {
       stale: toSafeBool(strategies.stale),
       refreshing: toSafeBool(strategies.refreshing),
       lastError: sanitizeErrorFlag(strategies.lastError),
+      failedDetailsCount: Number(strategies.failedDetailsCount) || 0,
       total: Number(strategies.total) || 0,
       lastRun:
         strategies.lastRun && typeof strategies.lastRun === "object"
@@ -321,6 +322,16 @@ function sanitizeStrategiesPayload(payload) {
     failedDetailsCount: toSafeNumber(source.failedDetailsCount),
     items: Array.isArray(source.items) ? source.items : [],
   };
+}
+
+function isRefreshingStatusPayload(payload) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  return Boolean(
+    (source.refreshing && (source.refreshing.market || source.refreshing.compositions)) ||
+      (source.market && source.market.refreshing) ||
+      (source.compositions && source.compositions.refreshing) ||
+      (source.strategies && source.strategies.refreshing)
+  );
 }
 
 function sendApiError(res, statusCode, message, error) {
@@ -519,12 +530,11 @@ app.get("/api/status", async (req, res) => {
         .catch(() => null),
     ]);
     const payload = sanitizeStatusPayload(rawPayload, strategiesSummary);
-    setCachedJson(cacheKey, payload, STATUS_API_CACHE_TTL_MS);
-    sendJson(
-      res,
-      payload,
-      "public, max-age=10"
-    );
+    const isRefreshing = isRefreshingStatusPayload(payload);
+    if (!isRefreshing) {
+      setCachedJson(cacheKey, payload, STATUS_API_CACHE_TTL_MS);
+    }
+    sendJson(res, payload, isRefreshing ? "no-store" : "public, max-age=10");
   } catch (error) {
     sendApiError(res, 500, "Не удалось получить статус", error);
   }
@@ -548,9 +558,16 @@ app.get("/api/strategies", async (req, res) => {
 
     const rawPayload = await strategiesProvider.getStrategiesPayload({ forceRefresh });
     const payload = sanitizeStrategiesPayload(rawPayload);
+    const isRefreshing = Boolean(payload && payload.refreshing);
     if (forceRefresh) invalidateApiCacheByPrefix("/api/strategies");
-    setCachedJson(forceRefresh ? "/api/strategies" : cacheKey, payload, STRATEGY_API_CACHE_TTL_MS);
-    sendJson(res, payload, forceRefresh ? "public, max-age=5" : "public, max-age=20");
+    if (!isRefreshing) {
+      setCachedJson(
+        forceRefresh ? "/api/strategies" : cacheKey,
+        payload,
+        STRATEGY_API_CACHE_TTL_MS
+      );
+    }
+    sendJson(res, payload, isRefreshing ? "no-store" : forceRefresh ? "public, max-age=5" : "public, max-age=20");
   } catch (error) {
     sendApiError(res, 500, "Не удалось загрузить стратегии автоследования", error);
   }

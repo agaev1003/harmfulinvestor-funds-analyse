@@ -6,9 +6,17 @@ process.env.DATA_CACHE_TTL_MS =
   process.env.DATA_CACHE_TTL_MS || String(365 * 24 * 60 * 60 * 1000);
 process.env.COMPOSITION_CACHE_TTL_MS =
   process.env.COMPOSITION_CACHE_TTL_MS || String(365 * 24 * 60 * 60 * 1000);
+process.env.STRATEGY_CACHE_TTL_MS =
+  process.env.STRATEGY_CACHE_TTL_MS || String(365 * 24 * 60 * 60 * 1000);
+process.env.STARTUP_WARMUP_ENABLED = process.env.STARTUP_WARMUP_ENABLED || "0";
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const path = require("path");
+
+process.env.STRATEGY_CACHE_FILE =
+  process.env.STRATEGY_CACHE_FILE ||
+  path.join(__dirname, "fixtures", "strategies-dashboard-data.json");
 
 const { startServer } = require("../server");
 
@@ -90,4 +98,15 @@ test("GET /api/compositions returns items + meta", async () => {
     body.meta.generatedAt === null || typeof body.meta.generatedAt === "string"
   );
   assert.equal(typeof body.meta.refreshing, "boolean");
+});
+
+test("GET /api/strategies returns cached strategies payload", async () => {
+  const { res, body } = await fetchJson("/api/strategies", 15_000);
+  assert.equal(res.status, 200);
+  assert.ok(body && typeof body === "object");
+  assert.ok(Array.isArray(body.items));
+  assert.ok(body.items.length > 0);
+  assert.equal(typeof body.refreshing, "boolean");
+  assert.equal(typeof body.total, "number");
+  assert.equal(typeof body.items[0].title, "string");
 });

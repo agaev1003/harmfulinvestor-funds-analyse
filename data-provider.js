@@ -996,6 +996,22 @@ async function buildCompositionsDataset({ forceRefresh = false } = {}) {
       .filter((item) => item && Array.isArray(item.issuers) && item.issuers.length > 0)
       .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ru"));
 
+    const catastrophicRefreshFailure =
+      refreshCandidates.length > 0 &&
+      runStats.failedCount >= refreshCandidates.length &&
+      runStats.successCount === 0 &&
+      runStats.noStructureCount === 0;
+
+    if (catastrophicRefreshFailure) {
+      const sampleMessage =
+        runStats.errorSamples.length > 0 && runStats.errorSamples[0].message
+          ? `: ${runStats.errorSamples[0].message}`
+          : "";
+      throw new Error(
+        `Не удалось обновить составы: все ${refreshCandidates.length} запросов завершились ошибкой${sampleMessage}`
+      );
+    }
+
     const runSnapshot = finalizeRun({ refreshedCount: refreshCandidates.length });
     const dataset = {
       version: COMPOSITION_DATASET_VERSION,
@@ -1017,6 +1033,7 @@ async function buildCompositionsDataset({ forceRefresh = false } = {}) {
     return dataset;
   } catch (error) {
     state.compositionsLastError = String(error.message || error);
+    finalizeRun({ refreshedCount: 0 });
     throw error;
   } finally {
     if (state.compositionsBuildState === runStats) {

@@ -1667,6 +1667,12 @@ function updateGlobalStatusPill(statusPayload) {
   const strategyHardError = Boolean(strategyLastErrorFlag && !strategyUpdatedAt);
   const marketHasError = Boolean(market && market.lastError);
   const compositionHasError = Boolean(compositions && compositions.lastError);
+  const marketFailureCount =
+    (Number(market && market.failedFunds) || 0) +
+    (Number(market && market.failedHistoryBatches) || 0) +
+    (Number(market && market.failedListPages) || 0);
+  const compositionFailureCount = Number(compositions && compositions.failedFunds) || 0;
+  const strategyFailureCount = Number(strategies && strategies.failedDetailsCount) || 0;
 
   const refreshing = Boolean(
     marketRefreshing ||
@@ -1689,12 +1695,25 @@ function updateGlobalStatusPill(statusPayload) {
   if (staleCount != null) line2 += ` · фондов ${staleMarkDays}+д: ${staleCount}`;
   if (marketAgeDays != null && marketAgeDays >= 2) line2 += ` · рынок не обновлялся ${marketAgeDays}д`;
 
-  const marketState = marketRefreshing ? 'обновляется' : (marketHasError ? 'ошибка' : 'актуально');
-  const compositionState = compositionRefreshing ? 'обновляется' : (compositionHasError ? 'ошибка' : 'актуально');
+  const marketState = marketRefreshing
+    ? 'обновляется'
+    : marketHasError
+      ? 'ошибка'
+      : marketFailureCount > 0
+        ? `частично (${marketFailureCount})`
+        : 'актуально';
+  const compositionState = compositionRefreshing
+    ? 'обновляется'
+    : compositionHasError
+      ? 'ошибка'
+      : compositionFailureCount > 0
+        ? `частично (${compositionFailureCount})`
+        : 'актуально';
   let strategyState = 'актуально';
   if (strategyRefreshing) strategyState = 'обновляется';
   else if (strategyHardError) strategyState = 'ошибка';
   else if (strategySoftError) strategyState = 'временная ошибка, показываем кэш';
+  else if (strategyFailureCount > 0) strategyState = `частично (${strategyFailureCount})`;
 
   const strategyUpdatedText = strategyUpdatedAt ? formatDateTimeRu(strategyUpdatedAt) : '--';
   const line3 = `Статус: рынок ${marketState} · состав ${compositionState} · автослед ${strategyState} (${strategyUpdatedText})`;
@@ -2501,6 +2520,7 @@ function renderSelectedStrategyInfo() {
     descEl.textContent = 'Здесь появится описание стратегии и ключевые параметры.';
     listEl.innerHTML = '<li><span>Нет данных</span><span></span></li>';
     if (dealsEl) dealsEl.innerHTML = '<li><span>Нет данных</span><span></span></li>';
+    setStrategyChartPlaceholder('Динамика портфеля');
     renderStrategyBenchmarkTable();
     return;
   }

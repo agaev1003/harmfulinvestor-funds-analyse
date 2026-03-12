@@ -1005,6 +1005,10 @@ async function getStrategiesStatusSummary() {
     refreshing: Boolean(state.refreshPromise),
     lastError: state.lastError || null,
     lastRun: state.lastRun || null,
+    failedDetailsCount:
+      snapshot && Number.isFinite(Number(snapshot.failedDetailsCount))
+        ? Number(snapshot.failedDetailsCount)
+        : 0,
     total:
       snapshot && Number.isFinite(Number(snapshot.total))
         ? Number(snapshot.total)
