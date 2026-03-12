@@ -421,8 +421,15 @@ app.get("/api/compositions", async (req, res) => {
     const rawData = await provider.getCompositionsPayload({ forceRefresh: true });
     const data = sanitizeCompositionsPayload(rawData);
     invalidateApiCacheByPrefix("/api/compositions");
-    setCachedJson("/api/compositions", data, COMPOSITION_API_CACHE_TTL_MS);
-    sendJson(res, data, "public, max-age=5");
+    const isRefreshing =
+      data &&
+      data.meta &&
+      typeof data.meta === "object" &&
+      Boolean(data.meta.refreshing);
+    if (!isRefreshing) {
+      setCachedJson("/api/compositions", data, COMPOSITION_API_CACHE_TTL_MS);
+    }
+    sendJson(res, data, isRefreshing ? "no-store" : "public, max-age=5");
   } catch (error) {
     sendApiError(res, 500, "Не удалось сформировать составы фондов", error);
   }

@@ -2143,13 +2143,17 @@ async function loadStrategiesData(forceRefresh = false, options = {}) {
     }
   } catch (error) {
     console.warn(`[strategies] ${String(error.message || error)}`);
+    strategiesData = [];
+    strategiesMeta = null;
     strategiesLoaded = false;
+    strategiesSelectedId = '';
     if (tbody) {
       tbody.innerHTML = `<tr><td colspan=\"7\" style=\"text-align:center;color:var(--red);padding:16px;\">${escapeHtml(
         String(error.message || error)
       )}</td></tr>`;
     }
     if (summaryEl) summaryEl.textContent = 'Стратегии не загружены';
+    renderSelectedStrategyInfo();
     setStrategyChartPlaceholder('Динамика портфеля');
     renderStrategyBenchmarkTable();
   }

@@ -1985,12 +1985,10 @@ async function getDataset() {
     ) {
       return Promise.resolve(state.dataset);
     }
-    if (state.buildPromise) return state.buildPromise;
-    state.buildPromise = withTimeout(
-      buildDataset(),
-      MAIN_BUILD_TIMEOUT_MS,
-      "main build"
-    )
+    if (state.buildPromise) {
+      return withTimeout(state.buildPromise, MAIN_BUILD_TIMEOUT_MS, "main build");
+    }
+    const buildPromise = buildDataset()
       .then((data) => {
         state.dataset = data;
         state.loadedAt = datasetTimestampMs(data);
@@ -2008,9 +2006,12 @@ async function getDataset() {
         throw error;
       })
       .finally(() => {
-        state.buildPromise = null;
+        if (state.buildPromise === buildPromise) {
+          state.buildPromise = null;
+        }
       });
-    return state.buildPromise;
+    state.buildPromise = buildPromise;
+    return withTimeout(buildPromise, MAIN_BUILD_TIMEOUT_MS, "main build");
   };
 
   const maybeRunDailyNoonRefresh = () => {
@@ -2045,7 +2046,11 @@ async function getDataset() {
 
   if (state.dataset) {
     const isStale = Date.now() - state.loadedAt > CACHE_TTL_MS;
-    if (isStale) startDatasetBuild();
+    if (isStale) {
+      startDatasetBuild().catch((error) => {
+        console.warn(`[data] Background refresh failed: ${String(error.message || error)}`);
+      });
+    }
     maybeRunDailyNoonRefresh();
     return state.dataset;
   }
@@ -2119,12 +2124,14 @@ async function getCompositionsDataset({ forceRefresh = false } = {}) {
     ) {
       return Promise.resolve(state.compositions);
     }
-    if (state.compositionsBuildPromise) return state.compositionsBuildPromise;
-    state.compositionsBuildPromise = withTimeout(
-      buildCompositionsDataset({ forceRefresh: force }),
-      COMPOSITION_BUILD_TIMEOUT_MS,
-      "composition build"
-    )
+    if (state.compositionsBuildPromise) {
+      return withTimeout(
+        state.compositionsBuildPromise,
+        COMPOSITION_BUILD_TIMEOUT_MS,
+        "composition build"
+      );
+    }
+    const buildPromise = buildCompositionsDataset({ forceRefresh: force })
       .then((data) => {
         state.compositions = data;
         state.compositionsLoadedAt = datasetTimestampMs(data);
@@ -2145,16 +2152,23 @@ async function getCompositionsDataset({ forceRefresh = false } = {}) {
         throw error;
       })
       .finally(() => {
-        state.compositionsBuildPromise = null;
+        if (state.compositionsBuildPromise === buildPromise) {
+          state.compositionsBuildPromise = null;
+        }
       });
-    return state.compositionsBuildPromise;
+    state.compositionsBuildPromise = buildPromise;
+    return withTimeout(buildPromise, COMPOSITION_BUILD_TIMEOUT_MS, "composition build");
   };
 
   if (forceRefresh) {
     // Stale-while-revalidate mode:
     // if we already have snapshot, return it immediately and refresh in background.
     if (state.compositions) {
-      startCompositionsBuild({ force: true });
+      startCompositionsBuild({ force: true }).catch((error) => {
+        console.warn(
+          `[composition] Forced background refresh failed: ${String(error.message || error)}`
+        );
+      });
       return state.compositions;
     }
     return startCompositionsBuild({ force: true });
@@ -2200,7 +2214,13 @@ async function getCompositionsDataset({ forceRefresh = false } = {}) {
 
   if (state.compositions) {
     const isStale = Date.now() - state.compositionsLoadedAt > COMPOSITION_CACHE_TTL_MS;
-    if (isStale) startCompositionsBuild();
+    if (isStale) {
+      startCompositionsBuild().catch((error) => {
+        console.warn(
+          `[composition] Background refresh failed: ${String(error.message || error)}`
+        );
+      });
+    }
     maybeRunDailyNoonRefresh();
     return state.compositions;
   }
