@@ -124,12 +124,16 @@ const state = {
   diskLoaded: false,
   diskLoadPromise: null,
   buildPromise: null,
+  marketBuildRunId: 0,
+  marketBuildWatchdog: null,
   datasetAutoRefreshDate: null,
   compositions: null,
   compositionsLoadedAt: 0,
   compositionsDiskLoaded: false,
   compositionsDiskLoadPromise: null,
   compositionsBuildPromise: null,
+  compositionsBuildRunId: 0,
+  compositionsBuildWatchdog: null,
   compositionsAutoRefreshDate: null,
   compositionsBuildState: null,
   compositionsLastRun: null,
@@ -206,6 +210,11 @@ function isGeneratedAfterMskHour(isoTs, hourMsk) {
   const d = new Date(ts);
   const h = mskHour(d);
   return h != null && h >= hourMsk;
+}
+
+function clearTimerSafe(timer) {
+  if (!timer) return;
+  clearTimeout(timer);
 }
 
 async function withTimeout(promise, timeoutMs, label) {
@@ -2005,28 +2014,60 @@ async function getDataset() {
     if (state.buildPromise) {
       return withTimeout(state.buildPromise, MAIN_BUILD_TIMEOUT_MS, "main build");
     }
+    const runId = Number(state.marketBuildRunId || 0) + 1;
+    state.marketBuildRunId = runId;
+    let watchdog = null;
     const buildPromise = buildDataset()
       .then((data) => {
-        state.dataset = data;
-        state.loadedAt = datasetTimestampMs(data);
-        state.marketNextRetryAt = 0;
+        if (state.marketBuildRunId === runId) {
+          state.dataset = data;
+          state.loadedAt = datasetTimestampMs(data);
+          state.marketNextRetryAt = 0;
+          state.marketLastError = null;
+        }
         return data;
       })
       .catch((error) => {
-        if (
-          resetDailyMarkOnFail &&
-          state.datasetAutoRefreshDate === resetDailyMarkOnFail
-        ) {
-          state.datasetAutoRefreshDate = null;
+        if (state.marketBuildRunId === runId) {
+          if (
+            resetDailyMarkOnFail &&
+            state.datasetAutoRefreshDate === resetDailyMarkOnFail
+          ) {
+            state.datasetAutoRefreshDate = null;
+          }
+          state.marketNextRetryAt = Date.now() + Math.max(10_000, BUILD_FAIL_BACKOFF_MS);
         }
-        state.marketNextRetryAt = Date.now() + Math.max(10_000, BUILD_FAIL_BACKOFF_MS);
         throw error;
       })
       .finally(() => {
+        if (state.marketBuildWatchdog === watchdog) {
+          clearTimerSafe(watchdog);
+          state.marketBuildWatchdog = null;
+        }
         if (state.buildPromise === buildPromise) {
           state.buildPromise = null;
         }
       });
+    watchdog = setTimeout(() => {
+      if (state.marketBuildRunId !== runId) return;
+      if (state.buildPromise !== buildPromise) return;
+      state.marketLastError = `main build watchdog timeout after ${MAIN_BUILD_TIMEOUT_MS}ms`;
+      state.marketNextRetryAt = Date.now() + Math.max(10_000, BUILD_FAIL_BACKOFF_MS);
+      if (
+        resetDailyMarkOnFail &&
+        state.datasetAutoRefreshDate === resetDailyMarkOnFail
+      ) {
+        state.datasetAutoRefreshDate = null;
+      }
+      state.marketBuildState = null;
+      state.buildPromise = null;
+      console.warn(
+        `[data] Main build watchdog released stuck build after ${MAIN_BUILD_TIMEOUT_MS}ms`
+      );
+    }, MAIN_BUILD_TIMEOUT_MS + 1_000);
+    if (typeof watchdog.unref === "function") watchdog.unref();
+    if (state.marketBuildWatchdog) clearTimerSafe(state.marketBuildWatchdog);
+    state.marketBuildWatchdog = watchdog;
     state.buildPromise = buildPromise;
     return withTimeout(buildPromise, MAIN_BUILD_TIMEOUT_MS, "main build");
   };
@@ -2148,31 +2189,67 @@ async function getCompositionsDataset({ forceRefresh = false } = {}) {
         "composition build"
       );
     }
+    const runId = Number(state.compositionsBuildRunId || 0) + 1;
+    state.compositionsBuildRunId = runId;
+    let watchdog = null;
     const buildPromise = buildCompositionsDataset({ forceRefresh: force })
       .then((data) => {
-        state.compositions = data;
-        state.compositionsLoadedAt = datasetTimestampMs(data);
-        state.compositionsNextRetryAt = 0;
+        if (state.compositionsBuildRunId === runId) {
+          state.compositions = data;
+          state.compositionsLoadedAt = datasetTimestampMs(data);
+          state.compositionsNextRetryAt = 0;
+          state.compositionsLastError = null;
+        }
         return data;
       })
       .catch((error) => {
-        if (
-          resetDailyMarkOnFail &&
-          state.compositionsAutoRefreshDate === resetDailyMarkOnFail
-        ) {
-          state.compositionsAutoRefreshDate = null;
-        }
-        if (!force) {
-          state.compositionsNextRetryAt =
-            Date.now() + Math.max(10_000, BUILD_FAIL_BACKOFF_MS);
+        if (state.compositionsBuildRunId === runId) {
+          if (
+            resetDailyMarkOnFail &&
+            state.compositionsAutoRefreshDate === resetDailyMarkOnFail
+          ) {
+            state.compositionsAutoRefreshDate = null;
+          }
+          if (!force) {
+            state.compositionsNextRetryAt =
+              Date.now() + Math.max(10_000, BUILD_FAIL_BACKOFF_MS);
+          }
         }
         throw error;
       })
       .finally(() => {
+        if (state.compositionsBuildWatchdog === watchdog) {
+          clearTimerSafe(watchdog);
+          state.compositionsBuildWatchdog = null;
+        }
         if (state.compositionsBuildPromise === buildPromise) {
           state.compositionsBuildPromise = null;
         }
       });
+    watchdog = setTimeout(() => {
+      if (state.compositionsBuildRunId !== runId) return;
+      if (state.compositionsBuildPromise !== buildPromise) return;
+      state.compositionsLastError =
+        `composition build watchdog timeout after ${COMPOSITION_BUILD_TIMEOUT_MS}ms`;
+      if (!force) {
+        state.compositionsNextRetryAt =
+          Date.now() + Math.max(10_000, BUILD_FAIL_BACKOFF_MS);
+      }
+      if (
+        resetDailyMarkOnFail &&
+        state.compositionsAutoRefreshDate === resetDailyMarkOnFail
+      ) {
+        state.compositionsAutoRefreshDate = null;
+      }
+      state.compositionsBuildState = null;
+      state.compositionsBuildPromise = null;
+      console.warn(
+        `[composition] Build watchdog released stuck build after ${COMPOSITION_BUILD_TIMEOUT_MS}ms`
+      );
+    }, COMPOSITION_BUILD_TIMEOUT_MS + 1_000);
+    if (typeof watchdog.unref === "function") watchdog.unref();
+    if (state.compositionsBuildWatchdog) clearTimerSafe(state.compositionsBuildWatchdog);
+    state.compositionsBuildWatchdog = watchdog;
     state.compositionsBuildPromise = buildPromise;
     return withTimeout(buildPromise, COMPOSITION_BUILD_TIMEOUT_MS, "composition build");
   };

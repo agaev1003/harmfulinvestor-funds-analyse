@@ -19,6 +19,9 @@ const STRATEGY_CACHE_TTL_MS = Number(
 const STRATEGY_ANALYTICS_CACHE_TTL_MS = Number(
   process.env.STRATEGY_ANALYTICS_CACHE_TTL_MS || 10 * 60 * 1000
 );
+const STRATEGY_REFRESH_TIMEOUT_MS = Number(
+  process.env.STRATEGY_REFRESH_TIMEOUT_MS || (IS_RENDER ? 4 * 60 * 1000 : 6 * 60 * 1000)
+);
 const STRATEGY_REQUEST_TIMEOUT_MS = Number(
   process.env.STRATEGY_REQUEST_TIMEOUT_MS || (IS_RENDER ? 18_000 : 20_000)
 );
@@ -56,10 +59,17 @@ const state = {
   diskLoaded: false,
   diskLoadPromise: null,
   refreshPromise: null,
+  refreshRunId: 0,
+  refreshWatchdog: null,
   lastError: null,
   lastRun: null,
   analyticsCache: new Map(),
 };
+
+function clearTimerSafe(timer) {
+  if (!timer) return;
+  clearTimeout(timer);
+}
 
 function normalizeSpace(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -787,37 +797,70 @@ async function refreshSnapshot() {
   if (state.refreshPromise) return state.refreshPromise;
 
   const startedAt = new Date().toISOString();
-  state.refreshPromise = (async () => {
+  const runId = Number(state.refreshRunId || 0) + 1;
+  state.refreshRunId = runId;
+  let watchdog = null;
+  const refreshPromise = (async () => {
     try {
       const snapshot = await buildSnapshot();
-      state.snapshot = snapshot;
-      state.loadedAt = snapshotTimestampMs(snapshot);
-      state.lastError = null;
-      state.lastRun = {
-        ok: true,
-        startedAt,
-        finishedAt: new Date().toISOString(),
-        total: snapshot.total,
-        failedDetailsCount: snapshot.failedDetailsCount,
-      };
-      persistCacheSnapshot(STRATEGY_CACHE_FILE, snapshot);
+      if (state.refreshRunId === runId) {
+        state.snapshot = snapshot;
+        state.loadedAt = snapshotTimestampMs(snapshot);
+        state.lastError = null;
+        state.lastRun = {
+          ok: true,
+          startedAt,
+          finishedAt: new Date().toISOString(),
+          total: snapshot.total,
+          failedDetailsCount: snapshot.failedDetailsCount,
+        };
+        persistCacheSnapshot(STRATEGY_CACHE_FILE, snapshot);
+      }
       return snapshot;
     } catch (error) {
-      state.lastError = String(error.message || error);
-      state.lastRun = {
-        ok: false,
-        startedAt,
-        finishedAt: new Date().toISOString(),
-        error: state.lastError,
-      };
+      if (state.refreshRunId === runId) {
+        state.lastError = String(error.message || error);
+        state.lastRun = {
+          ok: false,
+          startedAt,
+          finishedAt: new Date().toISOString(),
+          error: state.lastError,
+        };
+      }
       if (!state.snapshot) throw error;
       return state.snapshot;
     } finally {
-      state.refreshPromise = null;
+      if (state.refreshWatchdog === watchdog) {
+        clearTimerSafe(watchdog);
+        state.refreshWatchdog = null;
+      }
+      if (state.refreshPromise === refreshPromise) {
+        state.refreshPromise = null;
+      }
     }
   })();
+  state.refreshPromise = refreshPromise;
 
-  return state.refreshPromise;
+  watchdog = setTimeout(() => {
+    if (state.refreshRunId !== runId) return;
+    if (state.refreshPromise !== refreshPromise) return;
+    state.lastError = `strategies refresh watchdog timeout after ${STRATEGY_REFRESH_TIMEOUT_MS}ms`;
+    state.lastRun = {
+      ok: false,
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      error: state.lastError,
+    };
+    state.refreshPromise = null;
+    console.warn(
+      `[strategies] Refresh watchdog released stuck refresh after ${STRATEGY_REFRESH_TIMEOUT_MS}ms`
+    );
+  }, STRATEGY_REFRESH_TIMEOUT_MS + 1_000);
+  if (typeof watchdog.unref === "function") watchdog.unref();
+  if (state.refreshWatchdog) clearTimerSafe(state.refreshWatchdog);
+  state.refreshWatchdog = watchdog;
+
+  return refreshPromise;
 }
 
 async function getStrategiesPayload({ forceRefresh = false } = {}) {
