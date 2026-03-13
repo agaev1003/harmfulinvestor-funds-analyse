@@ -1,5 +1,15 @@
 const fs = require("fs/promises");
 const path = require("path");
+const {
+  normalizeSpace,
+  normalizeLower,
+  toNumber,
+  clearTimerSafe,
+  persistCacheSnapshot,
+} = require("./lib/utils");
+const mapLimit = require("./lib/map-limit");
+
+const STRATEGY_RETRY_DELAY_BASE_MS = 350;
 
 const IS_RENDER = Boolean(process.env.RENDER);
 const IS_APP_CONTAINER_DIR = path.resolve(__dirname) === "/app";
@@ -66,19 +76,6 @@ const state = {
   analyticsCache: new Map(),
 };
 
-function clearTimerSafe(timer) {
-  if (!timer) return;
-  clearTimeout(timer);
-}
-
-function normalizeSpace(value) {
-  return String(value || "").replace(/\s+/g, " ").trim();
-}
-
-function normalizeLower(value) {
-  return normalizeSpace(value).toLowerCase();
-}
-
 function randomHex(size) {
   let out = "";
   while (out.length < size) {
@@ -142,7 +139,7 @@ async function fetchJson(url, retries = STRATEGY_REQUEST_RETRIES, requestOptions
     } catch (error) {
       lastErr = error;
       if (attempt < retries) {
-        await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
+        await new Promise((resolve) => setTimeout(resolve, STRATEGY_RETRY_DELAY_BASE_MS * (attempt + 1)));
       }
     }
   }
@@ -154,21 +151,6 @@ function unwrapPayload(raw) {
     return raw.payload;
   }
   return raw;
-}
-
-function toNumber(value) {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (value == null) return null;
-  const prepared = String(value)
-    .replace(/\u00A0/g, " ")
-    .replace(/\s+/g, "")
-    .replace(/,/g, ".")
-    .replace(/[^0-9.+-]/g, "");
-  if (!prepared || prepared === "." || prepared === "+" || prepared === "-") {
-    return null;
-  }
-  const num = Number(prepared);
-  return Number.isFinite(num) ? num : null;
 }
 
 function parsePercent(value) {
@@ -568,19 +550,6 @@ function sortStrategiesByAllTimeYield(items) {
   });
 }
 
-async function persistCacheSnapshot(filePath, data) {
-  try {
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, JSON.stringify(data), "utf8");
-  } catch (error) {
-    console.warn(
-      `[strategy-cache] Persist skipped for ${filePath}: ${String(
-        error.message || error
-      )}`
-    );
-  }
-}
-
 function isValidSnapshot(data) {
   return Boolean(
     data &&
@@ -624,24 +593,6 @@ async function ensureDiskSnapshotLoaded() {
   })();
 
   await state.diskLoadPromise;
-}
-
-function mapLimit(items, limit, mapper) {
-  const list = Array.isArray(items) ? items : [];
-  const maxWorkers = Math.max(1, Number(limit) || 1);
-  const results = new Array(list.length);
-  let cursor = 0;
-
-  const workers = new Array(Math.min(maxWorkers, list.length)).fill(null).map(async () => {
-    while (true) {
-      const idx = cursor;
-      cursor += 1;
-      if (idx >= list.length) break;
-      results[idx] = await mapper(list[idx], idx);
-    }
-  });
-
-  return Promise.all(workers).then(() => results);
 }
 
 async function fetchCatalogTabs() {
@@ -754,7 +705,8 @@ async function buildSnapshot() {
           error: String(error.message || error),
         };
       }
-    }
+    },
+    { continueOnError: true }
   );
 
   const detailsById = new Map();
