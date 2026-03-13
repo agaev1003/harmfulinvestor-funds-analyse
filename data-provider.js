@@ -3,6 +3,61 @@ const path = require("path");
 const cheerio = require("cheerio");
 const zlib = require("zlib");
 
+// ── Shared library imports ──────────────────────────────────────────────────
+const {
+  normalizeSpace,
+  normalizeLower,
+  csvLikeText,
+  toNumber,
+  round,
+  clearTimerSafe,
+  withTimeout,
+  persistCacheSnapshot,
+} = require("./lib/utils");
+const { fetchText, fetchJson } = require("./lib/http-client");
+const mapLimit = require("./lib/map-limit");
+const {
+  parseIsoDateParts,
+  ageDaysFromIsoDate,
+  ageDaysFromTimestamp,
+  ruDateToIso,
+  isoDateToRu,
+  isoDateToUtcDate,
+  shiftIsoDate,
+  mskDate,
+  mskHour,
+  isGeneratedAfterMskHour,
+  toIsoFromMs,
+  datasetTimestampMs,
+  normalizeFundType,
+  normalizeInvestmentType,
+  normalizeHoldingName,
+  normalizeHoldingKey,
+  parseListPage,
+  shouldIncludeFund,
+  parseHeaderMeta,
+  parseDetailInfoMap,
+  pickInfoValue,
+  parseFundMetaFromDetailHtml,
+  parseInvestfundsStructureFromHtml,
+} = require("./lib/parser");
+const {
+  findLastWhere,
+  findLastWithNav,
+  findNavOnOrBefore,
+  getLatestAum,
+  filterHistoryByRange,
+  parseChartSeries,
+  mergeFundSeries,
+  mergeHistoryIncremental,
+  computeReturn,
+  buildReturnsRow,
+  buildCompositionChanges,
+  buildTimeseriesForGroups,
+} = require("./lib/calculations");
+
+// ── Configuration ───────────────────────────────────────────────────────────
+
 const IS_RENDER = Boolean(process.env.RENDER);
 const BASE_URL = process.env.DATA_SOURCE_BASE || "https://investfunds.ru";
 const IS_APP_CONTAINER_DIR = path.resolve(__dirname) === "/app";
@@ -109,14 +164,7 @@ const COMPOSITION_BUILD_TIMEOUT_MS = Number(
     (IS_RENDER ? 8 * 60 * 1000 : 12 * 60 * 1000)
 );
 
-const DATE_FMT_MSK = new Intl.DateTimeFormat("sv-SE", {
-  timeZone: "Europe/Moscow",
-});
-const HOUR_FMT_MSK = new Intl.DateTimeFormat("en-GB", {
-  timeZone: "Europe/Moscow",
-  hour: "2-digit",
-  hour12: false,
-});
+// ── State ───────────────────────────────────────────────────────────────────
 
 const state = {
   dataset: null,
@@ -147,40 +195,7 @@ const state = {
   compositionsNextRetryAt: 0,
 };
 
-function datasetTimestampMs(dataset) {
-  const ts = Date.parse(dataset && dataset.generatedAt ? dataset.generatedAt : "");
-  return Number.isFinite(ts) ? ts : Date.now();
-}
-
-function parseIsoDateParts(isoDate) {
-  const match = String(isoDate || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) return null;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
-    return null;
-  }
-  return { year, month, day };
-}
-
-function ageDaysFromIsoDate(isoDate, now = new Date()) {
-  const parts = parseIsoDateParts(isoDate);
-  if (!parts) return null;
-  const fromUtc = Date.UTC(parts.year, parts.month - 1, parts.day);
-  const nowUtc = Date.UTC(
-    now.getUTCFullYear(),
-    now.getUTCMonth(),
-    now.getUTCDate()
-  );
-  return Math.max(0, Math.floor((nowUtc - fromUtc) / 86_400_000));
-}
-
-function ageDaysFromTimestamp(value, nowMs = Date.now()) {
-  const ts = Date.parse(String(value || ""));
-  if (!Number.isFinite(ts)) return null;
-  return Math.max(0, Math.floor((nowMs - ts) / 86_400_000));
-}
+// ── Seed / disk cache helpers ───────────────────────────────────────────────
 
 function getLatestMarketDataDate(dataset) {
   const funds = dataset && Array.isArray(dataset.funds) ? dataset.funds : [];
@@ -192,46 +207,6 @@ function getLatestMarketDataDate(dataset) {
     if (!latest || date > latest) latest = date;
   }
   return latest;
-}
-
-function mskDate(value = new Date()) {
-  return DATE_FMT_MSK.format(value);
-}
-
-function mskHour(value = new Date()) {
-  const raw = HOUR_FMT_MSK.format(value);
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function isGeneratedAfterMskHour(isoTs, hourMsk) {
-  const ts = Date.parse(String(isoTs || ""));
-  if (!Number.isFinite(ts)) return false;
-  const d = new Date(ts);
-  const h = mskHour(d);
-  return h != null && h >= hourMsk;
-}
-
-function clearTimerSafe(timer) {
-  if (!timer) return;
-  clearTimeout(timer);
-}
-
-async function withTimeout(promise, timeoutMs, label) {
-  const ms = Math.max(1_000, Number(timeoutMs) || 1_000);
-  let timer = null;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise((_, reject) => {
-        timer = setTimeout(() => {
-          reject(new Error(`${label} timeout after ${ms}ms`));
-        }, ms);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
 }
 
 async function readSeedJsonGz(filePath) {
@@ -249,315 +224,7 @@ async function readSeedJsonGz(filePath) {
   }
 }
 
-async function persistCacheSnapshot(filePath, data) {
-  try {
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, JSON.stringify(data), "utf8");
-  } catch (error) {
-    // Non-fatal: runtime can still operate from in-memory data.
-    console.warn(
-      `[cache] Persist skipped for ${filePath}: ${String(error.message || error)}`
-    );
-  }
-}
-
-function normalizeSpace(value) {
-  return String(value || "").replace(/\s+/g, " ").trim();
-}
-
-function normalizeLower(value) {
-  return normalizeSpace(value).toLowerCase();
-}
-
-function toNumber(value) {
-  if (value == null) return null;
-  const prepared = String(value)
-    .replace(/\u00A0/g, " ")
-    .replace(/\s+/g, "")
-    .replace(/,/g, ".")
-    .replace(/[^0-9.+-]/g, "");
-  if (!prepared || prepared === "-" || prepared === "+" || prepared === ".") {
-    return null;
-  }
-  const num = Number(prepared);
-  return Number.isFinite(num) ? num : null;
-}
-
-function round(value, digits = 2) {
-  if (!Number.isFinite(value)) return null;
-  const factor = 10 ** digits;
-  return Math.round(value * factor) / factor;
-}
-
-function ruDateToIso(value) {
-  const normalized = normalizeSpace(value);
-  const match = normalized.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
-  if (!match) return null;
-  return `${match[3]}-${match[2]}-${match[1]}`;
-}
-
-function isoDateToRu(value) {
-  const normalized = normalizeSpace(value);
-  const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) return null;
-  return `${match[3]}.${match[2]}.${match[1]}`;
-}
-
-function isoDateToUtcDate(value) {
-  return new Date(`${value}T00:00:00Z`);
-}
-
-function shiftIsoDate(value, { years = 0, months = 0, days = 0 } = {}) {
-  const d = isoDateToUtcDate(value);
-  if (years) d.setUTCFullYear(d.getUTCFullYear() + years);
-  if (months) d.setUTCMonth(d.getUTCMonth() + months);
-  if (days) d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
-}
-
-function normalizeFundType(value) {
-  const v = normalizeLower(value);
-  if (v.includes("бирж")) return "биржевой";
-  if (v.includes("открыт")) return "открытый";
-  // Friend dashboard includes интервальные фонды in total universe (317).
-  // We map them to ОПИФ to keep the two-type UI consistent.
-  if (v.includes("интерв")) return "открытый";
-  return v || null;
-}
-
-function normalizeInvestmentType(value) {
-  const v = normalizeLower(value);
-  if (!v || v.includes("не определ")) return "Смешанный";
-  if (v.includes("акци")) return "Акции";
-  if (v.includes("облига")) return "Облигации";
-  if (v.includes("драг") || v.includes("металл") || v.includes("золото")) {
-    return "Драгметаллы";
-  }
-  if (v.includes("денеж")) return "Денежный";
-  if (v.includes("смеш")) return "Смешанный";
-  return "Смешанный";
-}
-
-function toIsoFromMs(ms) {
-  const n = Number(ms);
-  if (!Number.isFinite(n)) return null;
-  return DATE_FMT_MSK.format(new Date(n));
-}
-
-function csvLikeText(value) {
-  return normalizeSpace(value).replace(/\s+/g, " ").trim();
-}
-
-function parseMaxPage($) {
-  let maxPage = 1;
-  $("a.js_pagination[href*='page=']").each((_, el) => {
-    const href = $(el).attr("href") || "";
-    const match = href.match(/page=(\d+)/);
-    if (match) {
-      const page = Number(match[1]);
-      if (Number.isFinite(page) && page > maxPage) maxPage = page;
-    }
-  });
-  return maxPage;
-}
-
-function parseListPage(html) {
-  const $ = cheerio.load(html);
-  const maxPage = parseMaxPage($);
-
-  const fixedByIndex = new Map();
-  $("tr[class*='field_fixed_']").each((_, row) => {
-    const className = $(row).attr("class") || "";
-    const match = className.match(/field_fixed_(\d+)/);
-    if (!match) return;
-    const rowIndex = match[1];
-    const link = $(row).find("td.field_name a[href*='/funds/']").first();
-    const href = link.attr("href") || "";
-    const idMatch = href.match(/\/funds\/(\d+)\//);
-    if (!idMatch) return;
-
-    const fundId = Number(idMatch[1]);
-    const fundName = csvLikeText(link.text());
-    const fundTypeRaw = csvLikeText($(row).find("td.field_name .blue").first().text());
-
-    fixedByIndex.set(rowIndex, {
-      id: fundId,
-      name: fundName,
-      detail_path: href,
-      fund_type_raw: fundTypeRaw,
-    });
-  });
-
-  const scrollByIndex = new Map();
-  $("tr[class*='field_scroll_']").each((_, row) => {
-    const className = $(row).attr("class") || "";
-    const match = className.match(/field_scroll_(\d+)/);
-    if (!match) return;
-    const rowIndex = match[1];
-    const get = (selector) =>
-      csvLikeText($(row).find(selector).first().text());
-
-    scrollByIndex.set(rowIndex, {
-      management_company: get("td.field_funds_comp_name .js_td_width"),
-      status_raw: get("td.field_funds_statuses_name .js_td_width"),
-      category_raw: get("td.field_funds_categories_title .js_td_width"),
-      investment_object_raw: get("td.field_funds_object_name .js_td_width"),
-      specialization_raw: get(
-        "td.field_funds_investing_directions_name .js_td_width"
-      ),
-      nav_date_raw: get("td.field_funds_nav_date .js_td_width"),
-      aum_mln_raw: get("td.field_nav .js_td_width"),
-    });
-  });
-
-  const rows = [];
-  for (const [idx, fixed] of fixedByIndex.entries()) {
-    const scroll = scrollByIndex.get(idx) || {};
-    rows.push({
-      ...fixed,
-      ...scroll,
-      fund_type: normalizeFundType(fixed.fund_type_raw),
-      status: normalizeLower(scroll.status_raw),
-      investment_type: normalizeInvestmentType(scroll.investment_object_raw),
-      specialization:
-        csvLikeText(scroll.specialization_raw) || csvLikeText(scroll.category_raw),
-      nav_date: ruDateToIso(scroll.nav_date_raw),
-      aum_mln: toNumber(scroll.aum_mln_raw),
-    });
-  }
-
-  return { rows, maxPage };
-}
-
-function shouldIncludeFund(row) {
-  const typeOk = row.fund_type === "открытый" || row.fund_type === "биржевой";
-  const statusOk = row.status === "сформирован";
-  return typeOk && statusOk;
-}
-
-async function fetchWithTimeout(url, options = {}) {
-  const timeoutMs =
-    Number.isFinite(Number(options.timeoutMs)) && Number(options.timeoutMs) > 0
-      ? Number(options.timeoutMs)
-      : REQUEST_TIMEOUT_MS;
-  const fetchOptions = { ...options };
-  delete fetchOptions.timeoutMs;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, {
-      ...fetchOptions,
-      signal: controller.signal,
-      headers: {
-        "user-agent": "fund-dashboard-local/1.0",
-        accept: "text/html,application/json;q=0.9,*/*;q=0.8",
-        ...(fetchOptions.headers || {}),
-      },
-    });
-    return response;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function fetchText(url, retries = 2, requestOptions = {}) {
-  let lastErr;
-  for (let attempt = 0; attempt <= retries; attempt += 1) {
-    try {
-      const response = await fetchWithTimeout(url, requestOptions);
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status} for ${url}`);
-      }
-      return await response.text();
-    } catch (error) {
-      lastErr = error;
-      if (attempt < retries) {
-        await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
-      }
-    }
-  }
-  throw lastErr;
-}
-
-async function fetchJson(url, retries = 2, requestOptions = {}) {
-  let lastErr;
-  for (let attempt = 0; attempt <= retries; attempt += 1) {
-    try {
-      const response = await fetchWithTimeout(url, {
-        ...requestOptions,
-        headers: {
-          accept: "application/json,text/javascript,*/*;q=0.9",
-          ...((requestOptions && requestOptions.headers) || {}),
-        },
-      });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status} for ${url}`);
-      }
-      const text = await response.text();
-      if (!text.trim()) return null;
-      return JSON.parse(text);
-    } catch (error) {
-      lastErr = error;
-      if (attempt < retries) {
-        await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
-      }
-    }
-  }
-  throw lastErr;
-}
-
-function normalizeHoldingName(value) {
-  let v = csvLikeText(value);
-  if (!v) return null;
-  v = v.replace(/\s*-\s*Облигации\s*\[.*$/i, "");
-  v = v.replace(/\s*,\s*акция\s*,?\s*\[.*$/i, "");
-  v = v.replace(/\s*,\s*акции\s*,?\s*\[.*$/i, "");
-  v = v.replace(/\s*\[[^\]]+\]\s*$/g, "");
-  return csvLikeText(v) || null;
-}
-
-function normalizeHoldingKey(value) {
-  const normalized = normalizeHoldingName(value);
-  return normalized ? normalized.toLowerCase().replace(/ё/g, "е") : null;
-}
-
-function parseInvestfundsStructureDate(rawText) {
-  const text = csvLikeText(rawText);
-  if (!text) return null;
-  const match = text.match(/(\d{2}\.\d{2}\.\d{4})/);
-  if (!match) return null;
-  return ruDateToIso(match[1]) || null;
-}
-
-function parseInvestfundsStructureFromHtml(html) {
-  const $ = cheerio.load(html);
-  const block = $("[data-modul='structure']").first();
-  if (!block.length) return null;
-
-  const structureDate = parseInvestfundsStructureDate(
-    block.find(".middle_ttl").first().text()
-  );
-
-  const issuers = [];
-  block.find("table tbody tr").each((_, row) => {
-    const tds = $(row).find("td");
-    if (tds.length < 2) return;
-    const nameRaw = csvLikeText($(tds[0]).text());
-    const percent = toNumber($(tds[1]).text());
-    const name = normalizeHoldingName(nameRaw);
-    if (!name || percent == null) return;
-    issuers.push({
-      name,
-      percent: round(percent, 2),
-    });
-  });
-
-  if (!issuers.length) return null;
-  return {
-    structure_date: structureDate,
-    issuers,
-  };
-}
+// ── Composition candidate logic ─────────────────────────────────────────────
 
 async function loadPreviousCompositionDataset() {
   try {
@@ -601,85 +268,6 @@ async function fetchRankingFundIds({ force = false } = {}) {
   }
 }
 
-function parseFundMetaFromDetailHtml(html) {
-  const $ = cheerio.load(html);
-  const header = csvLikeText($(".widget_info_ttl").first().text());
-  const parsed = parseHeaderMeta(header);
-  const infoMap = parseDetailInfoMap($);
-
-  const nameFromH1 = csvLikeText($("h1").first().text());
-  const name = parsed.name || nameFromH1 || null;
-
-  const managementCompany =
-    parsed.management_company ||
-    pickInfoValue(infoMap, ["управляющая компания", "управляющая компания:"]) ||
-    csvLikeText($(".wdgt_img_logo img").first().attr("alt")) ||
-    null;
-
-  return {
-    name,
-    management_company: managementCompany,
-  };
-}
-
-function buildHoldingMap(items) {
-  const map = new Map();
-  for (const item of items || []) {
-    const key = normalizeHoldingKey(item && item.name);
-    const percent = toNumber(item && item.percent);
-    if (!key || percent == null) continue;
-    map.set(key, {
-      name: normalizeHoldingName(item.name) || item.name,
-      percent,
-    });
-  }
-  return map;
-}
-
-function buildCompositionChanges(currentIssuers, previousIssuers, previousDate) {
-  if (!previousDate || !Array.isArray(previousIssuers) || !previousIssuers.length) {
-    return {
-      previous_date: null,
-      bought: [],
-      sold: [],
-    };
-  }
-
-  const currentMap = buildHoldingMap(currentIssuers);
-  const previousMap = buildHoldingMap(previousIssuers);
-  const keys = new Set([...currentMap.keys(), ...previousMap.keys()]);
-
-  const bought = [];
-  const sold = [];
-
-  for (const key of keys) {
-    const curr = currentMap.get(key);
-    const prev = previousMap.get(key);
-    const currentPercent = curr ? Number(curr.percent) : 0;
-    const previousPercent = prev ? Number(prev.percent) : 0;
-    const delta = round(currentPercent - previousPercent, 2);
-    if (delta == null || Math.abs(delta) < 0.01) continue;
-
-    const row = {
-      name: (curr && curr.name) || (prev && prev.name) || key,
-      delta: Math.abs(delta),
-      current: round(currentPercent, 2),
-      previous: round(previousPercent, 2),
-    };
-    if (delta > 0) bought.push(row);
-    else sold.push(row);
-  }
-
-  bought.sort((a, b) => b.delta - a.delta);
-  sold.sort((a, b) => b.delta - a.delta);
-
-  return {
-    previous_date: previousDate || null,
-    bought,
-    sold,
-  };
-}
-
 function shouldRefreshCompositionCandidate(
   candidateId,
   previousById,
@@ -694,11 +282,9 @@ function shouldRefreshCompositionCandidate(
   const checkedAt = (check && check.checked_at) || (previous && previous.checked_at);
   const checkedAge = ageDaysFromTimestamp(checkedAt, nowMs);
 
-  // If never checked properly, refresh first.
   if (checkedAge == null) return true;
 
   if (forceRefresh) {
-    // In forced mode we still do delta refresh, but with larger quota and faster recheck thresholds.
     if (check && check.has_structure === false) {
       return checkedAge >= Math.max(1, Math.floor(COMPOSITION_MISSING_RECHECK_DAYS / 2));
     }
@@ -771,6 +357,8 @@ function pickCompositionRefreshCandidates(
   return ranked.slice(0, Math.max(1, maxToRefresh)).map((entry) => entry.candidate);
 }
 
+// ── Composition build ───────────────────────────────────────────────────────
+
 async function buildCompositionsDataset({ forceRefresh = false } = {}) {
   const startedAt = Date.now();
   const runStats = {
@@ -812,8 +400,6 @@ async function buildCompositionsDataset({ forceRefresh = false } = {}) {
     `[composition] Build started... mode=${forceRefresh ? "forced-delta" : "delta"}`
   );
   try {
-    // Use current dataset snapshot without forcing market rebuild;
-    // this keeps composition refresh lightweight on Render.
     await ensureDiskLoaded();
     const ds = state.dataset || (await getDataset());
     const rankingIds = await fetchRankingFundIds();
@@ -865,8 +451,6 @@ async function buildCompositionsDataset({ forceRefresh = false } = {}) {
       return {
         version: COMPOSITION_DATASET_VERSION,
         source: `${BASE_URL} + /fund-rankings/fund-yield/`,
-        // We still store current check time even if no candidates were due,
-        // so UI shows "last checked" instead of stale generation timestamp.
         generatedAt: new Date().toISOString(),
         fundUniverse: candidates.length,
         refreshedCount: 0,
@@ -983,18 +567,15 @@ async function buildCompositionsDataset({ forceRefresh = false } = {}) {
     const knownCandidateIds = new Set(candidates.map((c) => String(c.id)));
     const mergedById = new Map();
 
-    // Keep previous snapshot as baseline.
     for (const [id, item] of previousById.entries()) {
       if (!item) continue;
       mergedById.set(id, item);
     }
 
-    // Apply refreshed rows on top.
     for (const [id, item] of refreshedById.entries()) {
       mergedById.set(id, item);
     }
 
-    // Remove items that are definitely no longer in active universe and ranking scan.
     for (const id of [...mergedById.keys()]) {
       if (!knownCandidateIds.has(id)) {
         mergedById.delete(id);
@@ -1051,36 +632,7 @@ async function buildCompositionsDataset({ forceRefresh = false } = {}) {
   }
 }
 
-async function mapLimit(items, limit, worker, { continueOnError = false } = {}) {
-  if (!items.length) return [];
-  const capped = Math.max(1, Math.min(limit, items.length));
-  const results = new Array(items.length);
-  let cursor = 0;
-  let fatalError = null;
-
-  const workers = Array.from({ length: capped }, async () => {
-    while (true) {
-      if (fatalError) break;
-      const i = cursor;
-      cursor += 1;
-      if (i >= items.length) break;
-      try {
-        results[i] = await worker(items[i], i);
-      } catch (error) {
-        if (continueOnError) {
-          results[i] = null;
-          continue;
-        }
-        fatalError = error;
-        break;
-      }
-    }
-  });
-
-  await Promise.all(workers);
-  if (fatalError) throw fatalError;
-  return results;
-}
+// ── Chunk helper ────────────────────────────────────────────────────────────
 
 function chunkArray(items, chunkSize) {
   const size = Math.max(1, Number(chunkSize) || 1);
@@ -1091,49 +643,7 @@ function chunkArray(items, chunkSize) {
   return chunks;
 }
 
-function parseHeaderMeta(header) {
-  const normalized = csvLikeText(header);
-  if (!normalized) {
-    return { name: null, management_company: null, fund_id: null, ticker: null };
-  }
-
-  const nameMatch = normalized.match(/^(.*?)\s*\(([^)]+)\)/);
-  let name = null;
-  let managementCompany = null;
-  if (nameMatch) {
-    name = csvLikeText(nameMatch[1]);
-    managementCompany = csvLikeText(nameMatch[2]);
-  }
-
-  const segments = normalized.split(",").map((s) => csvLikeText(s));
-  let fundId = null;
-  let ticker = null;
-
-  for (const segment of segments) {
-    if (!fundId && /^\d[\dA-ZА-ЯЁa-zа-яё\-./\s]{2,}$/.test(segment)) {
-      fundId = segment.replace(/\s+/g, "");
-      continue;
-    }
-    if (!ticker && /^[A-Z0-9.-]{2,20}$/.test(segment)) {
-      ticker = segment;
-    }
-  }
-
-  return {
-    name: name || null,
-    management_company: managementCompany || null,
-    fund_id: fundId,
-    ticker: ticker || null,
-  };
-}
-
-function pickInfoValue(infoMap, keys) {
-  for (const key of keys) {
-    const value = infoMap.get(key);
-    if (value) return value;
-  }
-  return null;
-}
+// ── Fund detail fetching ────────────────────────────────────────────────────
 
 function buildFallbackFundMeta(row) {
   return {
@@ -1150,16 +660,6 @@ function buildFallbackFundMeta(row) {
     universe_source: row.universe_source || "main",
     cbonds_id: row.id,
   };
-}
-
-function parseDetailInfoMap($) {
-  const info = new Map();
-  $("[data-modul='info'] .item").each((_, el) => {
-    const key = normalizeLower($(el).find(".name").first().text());
-    const val = csvLikeText($(el).find(".value").first().text());
-    if (key) info.set(key, val || null);
-  });
-  return info;
 }
 
 async function fetchFundDetails(row) {
@@ -1231,19 +731,7 @@ async function fetchFundDetails(row) {
   };
 }
 
-function parseChartSeries(rawSeries) {
-  const map = new Map();
-  for (const point of rawSeries || []) {
-    if (!Array.isArray(point) || point.length < 2) continue;
-    const date = toIsoFromMs(point[0]);
-    const value = toNumber(point[1]);
-    if (!date || value == null) continue;
-    map.set(date, value);
-  }
-  return [...map.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([time, value]) => ({ time, value }));
-}
+// ── Chart URL and series batch fetch ────────────────────────────────────────
 
 function buildChartUrl(fundIds, dataKey, dateFrom = "01.01.1990") {
   const routeFundId = fundIds[0];
@@ -1328,87 +816,6 @@ async function fetchFundSeriesBatch(
   return out;
 }
 
-function mergeFundSeries(paySeries, scaSeries) {
-  const byDate = new Map();
-  for (const p of paySeries) {
-    if (!byDate.has(p.time)) byDate.set(p.time, { time: p.time });
-    byDate.get(p.time).nav = p.value;
-  }
-  for (const p of scaSeries) {
-    if (!byDate.has(p.time)) byDate.set(p.time, { time: p.time });
-    byDate.get(p.time).aum = p.value;
-  }
-
-  const rows = [...byDate.values()].sort((a, b) => a.time.localeCompare(b.time));
-
-  let prevShares = null;
-  let prevAum = null;
-  const merged = [];
-
-  for (const row of rows) {
-    const nav = row.nav != null ? Number(row.nav) : null;
-    const aum = row.aum != null ? Number(row.aum) : null;
-
-    let shares = null;
-    if (nav != null && nav > 0 && aum != null) {
-      shares = aum / nav;
-    }
-
-    let flow = null;
-    if (shares != null && prevShares != null && nav != null) {
-      flow = (shares - prevShares) * nav;
-    } else if (aum != null && prevAum != null) {
-      flow = aum - prevAum;
-    }
-
-    merged.push({
-      time: row.time,
-      nav: nav != null ? round(nav, 6) : null,
-      aum: aum != null ? round(aum, 2) : null,
-      shares: shares != null ? round(shares, 2) : null,
-      flow: flow != null ? round(flow, 2) : null,
-    });
-
-    if (shares != null) prevShares = shares;
-    if (aum != null) prevAum = aum;
-  }
-
-  return merged;
-}
-
-function mergeValueSeries(existingSeries, freshSeries) {
-  const byDate = new Map();
-  for (const point of existingSeries || []) {
-    if (!point || !point.time || point.value == null) continue;
-    byDate.set(point.time, point.value);
-  }
-  for (const point of freshSeries || []) {
-    if (!point || !point.time || point.value == null) continue;
-    byDate.set(point.time, point.value);
-  }
-  return [...byDate.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([time, value]) => ({ time, value }));
-}
-
-function extractSeriesFromHistory(history, key) {
-  if (!Array.isArray(history) || !history.length) return [];
-  return history
-    .filter((point) => point && point.time && point[key] != null)
-    .map((point) => ({ time: point.time, value: point[key] }));
-}
-
-function mergeHistoryIncremental(previousHistory, freshPaySeries, freshScaSeries) {
-  if (!Array.isArray(previousHistory) || !previousHistory.length) {
-    return mergeFundSeries(freshPaySeries, freshScaSeries);
-  }
-  const previousPay = extractSeriesFromHistory(previousHistory, "nav");
-  const previousSca = extractSeriesFromHistory(previousHistory, "aum");
-  const paySeries = mergeValueSeries(previousPay, freshPaySeries);
-  const scaSeries = mergeValueSeries(previousSca, freshScaSeries);
-  return mergeFundSeries(paySeries, scaSeries);
-}
-
 function historyLastDate(history) {
   if (!Array.isArray(history) || !history.length) return null;
   return history[history.length - 1].time || null;
@@ -1426,163 +833,7 @@ function batchDateFrom(batchFundIds, previousHistoriesById) {
   return isoDateToRu(earliestIso) || "01.01.1990";
 }
 
-function findLastWithNav(history) {
-  for (let i = history.length - 1; i >= 0; i -= 1) {
-    if (history[i].nav != null) return history[i];
-  }
-  return null;
-}
-
-function findNavOnOrBefore(history, targetIsoDate) {
-  for (let i = history.length - 1; i >= 0; i -= 1) {
-    const point = history[i];
-    if (point.time <= targetIsoDate && point.nav != null) return point.nav;
-  }
-  return null;
-}
-
-function computeReturn(history, lastDate, period) {
-  let targetDate = null;
-  switch (period) {
-    case "1m":
-      targetDate = shiftIsoDate(lastDate, { months: -1 });
-      break;
-    case "3m":
-      targetDate = shiftIsoDate(lastDate, { months: -3 });
-      break;
-    case "6m":
-      targetDate = shiftIsoDate(lastDate, { months: -6 });
-      break;
-    case "ytd": {
-      const year = isoDateToUtcDate(lastDate).getUTCFullYear();
-      targetDate = `${year}-01-01`;
-      break;
-    }
-    case "1y":
-      targetDate = shiftIsoDate(lastDate, { years: -1 });
-      break;
-    case "3y":
-      targetDate = shiftIsoDate(lastDate, { years: -3 });
-      break;
-    case "5y":
-      targetDate = shiftIsoDate(lastDate, { years: -5 });
-      break;
-    default:
-      return null;
-  }
-
-  const endNav = findNavOnOrBefore(history, lastDate);
-  const startNav = findNavOnOrBefore(history, targetDate);
-  if (endNav == null || startNav == null || startNav <= 0) return null;
-  return round(((endNav / startNav) - 1) * 100, 4);
-}
-
-function buildReturnsRow(fundMeta, history) {
-  const last = findLastWithNav(history);
-  const lastAum = [...history].reverse().find((p) => p.aum != null) || null;
-  const lastDate = (last || lastAum || {}).time || null;
-
-  if (!lastDate) {
-    return {
-      id: fundMeta.id,
-      ticker: fundMeta.ticker,
-      fund_id: fundMeta.fund_id,
-      name: fundMeta.name,
-      mc: fundMeta.management_company,
-      fund_type: fundMeta.fund_type,
-      inv_type: fundMeta.investment_type,
-      spec: fundMeta.specialization,
-      nav: null,
-      aum: null,
-      date: null,
-      "1m": null,
-      "3m": null,
-      "6m": null,
-      ytd: null,
-      "1y": null,
-      "3y": null,
-      "5y": null,
-    };
-  }
-
-  const latestNav = findNavOnOrBefore(history, lastDate);
-  const latestAumPoint = [...history].reverse().find((p) => p.time <= lastDate && p.aum != null);
-  const latestAum = latestAumPoint ? latestAumPoint.aum : null;
-
-  return {
-    id: fundMeta.id,
-    ticker: fundMeta.ticker,
-    fund_id: fundMeta.fund_id,
-    name: fundMeta.name,
-    mc: fundMeta.management_company,
-    fund_type: fundMeta.fund_type,
-    inv_type: fundMeta.investment_type,
-    spec: fundMeta.specialization,
-    nav: latestNav != null ? round(latestNav, 6) : null,
-    aum: latestAum != null ? round(latestAum, 2) : null,
-    date: lastDate,
-    "1m": computeReturn(history, lastDate, "1m"),
-    "3m": computeReturn(history, lastDate, "3m"),
-    "6m": computeReturn(history, lastDate, "6m"),
-    ytd: computeReturn(history, lastDate, "ytd"),
-    "1y": computeReturn(history, lastDate, "1y"),
-    "3y": computeReturn(history, lastDate, "3y"),
-    "5y": computeReturn(history, lastDate, "5y"),
-  };
-}
-
-function getLatestAum(history) {
-  for (let i = history.length - 1; i >= 0; i -= 1) {
-    if (history[i].aum != null) return history[i].aum;
-  }
-  return 0;
-}
-
-function buildTimeseriesForGroups(funds, historiesById, getGroupName) {
-  const dateSet = new Set();
-  for (const fund of funds) {
-    const history = historiesById[String(fund.id)] || [];
-    for (const p of history) {
-      if (p.aum != null || p.flow != null) dateSet.add(p.time);
-    }
-  }
-
-  const dates = [...dateSet].sort((a, b) => a.localeCompare(b));
-  const index = new Map(dates.map((d, i) => [d, i]));
-  const data = {};
-
-  for (const fund of funds) {
-    const history = historiesById[String(fund.id)] || [];
-    const groupName = getGroupName(fund);
-    if (!groupName) continue;
-
-    if (!data[groupName]) {
-      data[groupName] = {
-        aum: new Array(dates.length).fill(0),
-        flow: new Array(dates.length).fill(0),
-      };
-    }
-
-    const aumByDate = new Map();
-    for (const point of history) {
-      if (point.aum != null) aumByDate.set(point.time, point.aum);
-    }
-    let lastAum = null;
-    for (let i = 0; i < dates.length; i += 1) {
-      const date = dates[i];
-      if (aumByDate.has(date)) lastAum = aumByDate.get(date);
-      if (lastAum != null) data[groupName].aum[i] += lastAum;
-    }
-
-    for (const point of history) {
-      const idx = index.get(point.time);
-      if (idx == null) continue;
-      if (point.flow != null) data[groupName].flow[idx] += point.flow;
-    }
-  }
-
-  return { dates, data };
-}
+// ── Fund type helpers ───────────────────────────────────────────────────────
 
 function parseFundTypeQuery(raw) {
   const q = normalizeLower(raw || "all");
@@ -1620,6 +871,8 @@ function pickTopGroupsByAum(funds, historiesById, groupKeySelector, topN = TOP_G
     .slice(0, topN)
     .map(([key]) => key);
 }
+
+// ── Main dataset build ──────────────────────────────────────────────────────
 
 async function buildDataset() {
   const startedAt = Date.now();
@@ -1877,7 +1130,8 @@ async function buildDataset() {
             if (!fund) continue;
 
             const last = findLastWithNav(history);
-            const lastAumPoint = [...history].reverse().find((p) => p.aum != null) || null;
+            // P11 fix: use findLastWhere instead of [...history].reverse().find()
+            const lastAumPoint = findLastWhere(history, (p) => p.aum != null);
             fund.latest_nav = last ? last.nav : null;
             fund.latest_aum = lastAumPoint ? lastAumPoint.aum : null;
             fund.latest_date = (last || lastAumPoint || {}).time || null;
@@ -1889,15 +1143,13 @@ async function buildDataset() {
               error.message || error
             )}`
           );
-          // Keep previous history for this batch to avoid full-build failure.
           for (const fundId of batchFundIds) {
             const previousHistory = previousHistoriesById[String(fundId)] || [];
             historiesById[String(fundId)] = previousHistory;
             const fund = fundById.get(fundId);
             if (!fund) continue;
             const last = findLastWithNav(previousHistory);
-            const lastAumPoint =
-              [...previousHistory].reverse().find((p) => p.aum != null) || null;
+            const lastAumPoint = findLastWhere(previousHistory, (p) => p.aum != null);
             fund.latest_nav = last ? last.nav : null;
             fund.latest_aum = lastAumPoint ? lastAumPoint.aum : null;
             fund.latest_date = (last || lastAumPoint || {}).time || null;
@@ -1950,6 +1202,8 @@ async function buildDataset() {
   }
 }
 
+// ── Dataset validation & disk loading ───────────────────────────────────────
+
 function isValidMainDataset(data) {
   return Boolean(
     data &&
@@ -1999,6 +1253,8 @@ async function ensureDiskLoaded() {
 
   await state.diskLoadPromise;
 }
+
+// ── getDataset (main entry) ─────────────────────────────────────────────────
 
 async function getDataset() {
   await ensureDiskLoaded();
@@ -2115,6 +1371,8 @@ async function getDataset() {
 
   return startDatasetBuild();
 }
+
+// ── Compositions dataset loading ────────────────────────────────────────────
 
 function isValidCompositionDataset(data) {
   return Boolean(
@@ -2255,8 +1513,6 @@ async function getCompositionsDataset({ forceRefresh = false } = {}) {
   };
 
   if (forceRefresh) {
-    // Stale-while-revalidate mode:
-    // if we already have snapshot, return it immediately and refresh in background.
     if (state.compositions) {
       startCompositionsBuild({ force: true }).catch((error) => {
         console.warn(
@@ -2292,8 +1548,6 @@ async function getCompositionsDataset({ forceRefresh = false } = {}) {
 
     state.compositionsAutoRefreshDate = todayMsk;
     startCompositionsBuild({
-      // Daily run should stay lightweight (regular delta mode).
-      // Forced mode is still available via manual refresh button.
       force: false,
       resetDailyMarkOnFail: todayMsk,
     }).catch((error) => {
@@ -2322,14 +1576,7 @@ async function getCompositionsDataset({ forceRefresh = false } = {}) {
   return startCompositionsBuild();
 }
 
-function filterHistoryByRange(history, from, to) {
-  if (!from && !to) return history;
-  return history.filter((p) => {
-    if (from && p.time < from) return false;
-    if (to && p.time > to) return false;
-    return true;
-  });
-}
+// ── Public API functions ────────────────────────────────────────────────────
 
 async function getFunds() {
   const ds = await getDataset();
@@ -2367,10 +1614,10 @@ function buildCompositionsMeta(ds) {
   for (const item of items) {
     const date = item && item.structure_date ? String(item.structure_date) : null;
     if (!date) continue;
-    const ageDays = ageDaysFromIsoDate(date, now);
-    if (ageDays == null) continue;
-    if (ageDays >= STALE_MARK_DAYS) staleCount += 1;
-    if (maxAgeDays == null || ageDays > maxAgeDays) maxAgeDays = ageDays;
+    const ageD = ageDaysFromIsoDate(date, now);
+    if (ageD == null) continue;
+    if (ageD >= STALE_MARK_DAYS) staleCount += 1;
+    if (maxAgeDays == null || ageD > maxAgeDays) maxAgeDays = ageD;
     if (!latestStructureDate || date > latestStructureDate) latestStructureDate = date;
   }
 

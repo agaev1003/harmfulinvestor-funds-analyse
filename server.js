@@ -32,8 +32,10 @@ const ACCESS_COOKIE_NAME = String(process.env.ACCESS_COOKIE_NAME || "fi_access")
 const ACCESS_COOKIE_MAX_AGE_SEC = Number(
   process.env.ACCESS_COOKIE_MAX_AGE_SEC || 60 * 60 * 24 * 30
 );
+const REFRESH_COOLDOWN_MS = Number(process.env.REFRESH_COOLDOWN_MS || 30_000);
 const API_CACHE_MAX_ENTRIES = Number(process.env.API_CACHE_MAX_ENTRIES || 300);
 const apiCache = new Map();
+const refreshLastTriggeredAt = { compositions: 0, strategies: 0 };
 const IS_APP_CONTAINER_DIR = path.resolve(__dirname) === "/app";
 const STARTUP_WARMUP_ENABLED =
   process.env.STARTUP_WARMUP_ENABLED != null
@@ -76,7 +78,7 @@ function hasAccessCookie(req) {
   return cookies[ACCESS_COOKIE_NAME] === ACCESS_LINK_TOKEN;
 }
 
-function setAccessCookie(res) {
+function setAccessCookie(req, res) {
   const maxAge = Number.isFinite(ACCESS_COOKIE_MAX_AGE_SEC) && ACCESS_COOKIE_MAX_AGE_SEC > 0
     ? Math.floor(ACCESS_COOKIE_MAX_AGE_SEC)
     : 60 * 60 * 24 * 30;
@@ -87,6 +89,9 @@ function setAccessCookie(res) {
     "SameSite=Lax",
     `Max-Age=${maxAge}`,
   ];
+  if (req.secure || req.headers["x-forwarded-proto"] === "https") {
+    parts.push("Secure");
+  }
   res.setHeader("Set-Cookie", parts.join("; "));
 }
 
@@ -122,7 +127,7 @@ app.use((req, res, next) => {
       ? req.query.access.trim()
       : "";
   if (accessFromQuery && accessFromQuery === ACCESS_LINK_TOKEN) {
-    setAccessCookie(res);
+    setAccessCookie(req, res);
     const redirectTo = stripAccessQuery(req.originalUrl || req.url || "/");
     res.redirect(302, redirectTo);
     return;
@@ -184,10 +189,6 @@ function sendJson(res, payload, cacheControl) {
   res.json(payload);
 }
 
-function toSafeBool(value) {
-  return Boolean(value);
-}
-
 function toSafeNumber(value) {
   const num = Number(value);
   return Number.isFinite(num) ? num : null;
@@ -228,15 +229,15 @@ function sanitizeStatusPayload(payload, strategiesSummary) {
     generatedAgeDays: toSafeNumber(source.generatedAgeDays),
     staleMarkDays: toSafeNumber(source.staleMarkDays),
     refreshing: {
-      market: toSafeBool(source.refreshing && source.refreshing.market),
-      compositions: toSafeBool(source.refreshing && source.refreshing.compositions),
+      market: Boolean(source.refreshing && source.refreshing.market),
+      compositions: Boolean(source.refreshing && source.refreshing.compositions),
     },
     market: {
       generatedAt: market.generatedAt || null,
       generatedAgeDays: toSafeNumber(market.generatedAgeDays),
       latestDataDate: market.latestDataDate || null,
       latestDataAgeDays: toSafeNumber(market.latestDataAgeDays),
-      refreshing: toSafeBool(market.refreshing),
+      refreshing: Boolean(market.refreshing),
       failedFunds: Number(market.failedFunds) || 0,
       failedHistoryBatches: Number(market.failedHistoryBatches) || 0,
       failedListPages: Number(market.failedListPages) || 0,
@@ -252,7 +253,7 @@ function sanitizeStatusPayload(payload, strategiesSummary) {
       staleCount: Number(compositions.staleCount) || 0,
       maxAgeDays: toSafeNumber(compositions.maxAgeDays),
       latestStructureDate: compositions.latestStructureDate || null,
-      refreshing: toSafeBool(compositions.refreshing),
+      refreshing: Boolean(compositions.refreshing),
       progress: sanitizeProgressMeta(compositions.progress),
       failedFunds: Number(compositions.failedFunds) || 0,
       nextRetryAt: compositions.nextRetryAt || null,
@@ -261,8 +262,8 @@ function sanitizeStatusPayload(payload, strategiesSummary) {
     strategies: {
       generatedAt: strategies.generatedAt || null,
       loadedAt: strategies.loadedAt || null,
-      stale: toSafeBool(strategies.stale),
-      refreshing: toSafeBool(strategies.refreshing),
+      stale: Boolean(strategies.stale),
+      refreshing: Boolean(strategies.refreshing),
       lastError: sanitizeErrorFlag(strategies.lastError),
       failedDetailsCount: Number(strategies.failedDetailsCount) || 0,
       total: Number(strategies.total) || 0,
@@ -298,7 +299,7 @@ function sanitizeCompositionsPayload(payload) {
       staleCount: Number(meta.staleCount) || 0,
       maxAgeDays: toSafeNumber(meta.maxAgeDays),
       latestStructureDate: meta.latestStructureDate || null,
-      refreshing: toSafeBool(meta.refreshing),
+      refreshing: Boolean(meta.refreshing),
       progress: sanitizeProgressMeta(meta.progress),
       failedFunds: Number(meta.failedFunds) || 0,
       nextRetryAt: meta.nextRetryAt || null,
@@ -313,8 +314,8 @@ function sanitizeStrategiesPayload(payload) {
   return {
     generatedAt: source.generatedAt || null,
     loadedAt: source.loadedAt || null,
-    stale: toSafeBool(source.stale),
-    refreshing: toSafeBool(source.refreshing),
+    stale: Boolean(source.stale),
+    refreshing: Boolean(source.refreshing),
     lastError: sanitizeErrorFlag(source.lastError),
     total: Number(source.total) || 0,
     activeCount: toSafeNumber(source.activeCount),
@@ -428,6 +429,13 @@ app.get("/api/compositions", async (req, res) => {
       sendJson(res, data, "public, max-age=15");
       return;
     }
+
+    const now = Date.now();
+    if (now - refreshLastTriggeredAt.compositions < REFRESH_COOLDOWN_MS) {
+      res.status(429).json({ error: "Слишком частые запросы на обновление. Повторите позже." });
+      return;
+    }
+    refreshLastTriggeredAt.compositions = now;
 
     const rawData = await provider.getCompositionsPayload({ forceRefresh: true });
     const data = sanitizeCompositionsPayload(rawData);
@@ -556,6 +564,15 @@ app.get("/api/strategies", async (req, res) => {
       }
     }
 
+    if (forceRefresh) {
+      const now = Date.now();
+      if (now - refreshLastTriggeredAt.strategies < REFRESH_COOLDOWN_MS) {
+        res.status(429).json({ error: "Слишком частые запросы на обновление. Повторите позже." });
+        return;
+      }
+      refreshLastTriggeredAt.strategies = now;
+    }
+
     const rawPayload = await strategiesProvider.getStrategiesPayload({ forceRefresh });
     const payload = sanitizeStrategiesPayload(rawPayload);
     const isRefreshing = Boolean(payload && payload.refreshing);
@@ -576,7 +593,7 @@ app.get("/api/strategies", async (req, res) => {
 app.get("/api/strategies/:id/analytics", async (req, res) => {
   try {
     const strategyId = String(req.params.id || "").trim();
-    if (!strategyId) {
+    if (!strategyId || !/^[a-zA-Z0-9_-]{1,64}$/.test(strategyId)) {
       sendApiError(res, 400, "Некорректный id стратегии");
       return;
     }
@@ -641,6 +658,7 @@ function startServer(port = PORT, host = HOST) {
     );
     if (!STARTUP_WARMUP_ENABLED) return;
     // Defer warmup slightly so platform probes can pass quickly on cold start.
+    const WARMUP_DELAY_MS = 300;
     const warmupTimer = setTimeout(() => {
       // Preload disk/seed snapshots so first user request is fast.
       provider
@@ -662,7 +680,7 @@ function startServer(port = PORT, host = HOST) {
             `[warmup] strategies preload failed: ${String(error.message || error)}`
           )
         );
-    }, 300);
+    }, WARMUP_DELAY_MS);
     if (typeof warmupTimer.unref === "function") warmupTimer.unref();
   });
   return server;
