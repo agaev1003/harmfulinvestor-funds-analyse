@@ -401,7 +401,14 @@ async function buildCompositionsDataset({ forceRefresh = false } = {}) {
   );
   try {
     await ensureDiskLoaded();
-    const ds = state.dataset || (await getDataset());
+    // Use existing dataset directly to avoid blocking on a stuck market build.
+    if (!state.dataset) {
+      await getDataset();
+    }
+    const ds = state.dataset;
+    if (!ds || !Array.isArray(ds.funds)) {
+      throw new Error("Нет данных по рынку для построения составов");
+    }
     const rankingIds = await fetchRankingFundIds();
     const candidatesById = new Map(
       ds.funds.map((fund) => [
@@ -1309,6 +1316,10 @@ async function getDataset() {
       if (state.buildPromise !== buildPromise) return;
       state.marketLastError = `main build watchdog timeout after ${MAIN_BUILD_TIMEOUT_MS}ms`;
       state.marketNextRetryAt = Date.now() + Math.max(10_000, BUILD_FAIL_BACKOFF_MS);
+      // Prevent infinite restart loop: bump loadedAt so data is not immediately stale.
+      if (state.dataset) {
+        state.loadedAt = Date.now();
+      }
       if (
         resetDailyMarkOnFail &&
         state.datasetAutoRefreshDate === resetDailyMarkOnFail
@@ -1492,6 +1503,10 @@ async function getCompositionsDataset({ forceRefresh = false } = {}) {
       if (!force) {
         state.compositionsNextRetryAt =
           Date.now() + Math.max(10_000, BUILD_FAIL_BACKOFF_MS);
+      }
+      // Prevent infinite restart loop: bump loadedAt so data is not immediately stale.
+      if (state.compositions) {
+        state.compositionsLoadedAt = Date.now();
       }
       if (
         resetDailyMarkOnFail &&
@@ -1705,10 +1720,11 @@ async function getCompositionsPayload({ forceRefresh = false } = {}) {
 }
 
 async function getStatusSummary() {
-  const [mainDs, compDs] = await Promise.all([
-    getDataset(),
-    getCompositionsDataset({ forceRefresh: false }),
-  ]);
+  // Use already-loaded state to avoid blocking on slow builds.
+  await ensureDiskLoaded();
+  await ensureCompositionDiskLoaded();
+  const mainDs = state.dataset || { funds: [], generatedAt: null };
+  const compDs = state.compositions || { items: [], generatedAt: null };
 
   const mainGeneratedAt = mainDs && mainDs.generatedAt ? mainDs.generatedAt : null;
   const mainAgeDays = ageDaysFromTimestamp(mainGeneratedAt);
