@@ -4,6 +4,15 @@ const path = require("path");
 const provider = require("./data-provider");
 const strategiesProvider = require("./strategies-provider");
 
+// ── Graceful error handling (prevents silent crashes) ───────────────────────
+process.on("unhandledRejection", (reason) => {
+  console.error("[FATAL] Unhandled promise rejection:", reason);
+});
+process.on("uncaughtException", (error) => {
+  console.error("[FATAL] Uncaught exception:", error);
+  process.exit(1);
+});
+
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const HOST = String(process.env.HOST || "0.0.0.0");
@@ -34,6 +43,7 @@ const ACCESS_COOKIE_MAX_AGE_SEC = Number(
 );
 const REFRESH_COOLDOWN_MS = Number(process.env.REFRESH_COOLDOWN_MS || 30_000);
 const API_CACHE_MAX_ENTRIES = Number(process.env.API_CACHE_MAX_ENTRIES || 300);
+const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 120_000);
 const apiCache = new Map();
 const refreshLastTriggeredAt = { compositions: 0, strategies: 0 };
 const IS_APP_CONTAINER_DIR = path.resolve(__dirname) === "/app";
@@ -52,6 +62,17 @@ const HEALTH_PATHS = new Set([
 ]);
 
 app.use(compression({ threshold: 1024 }));
+
+// Global request timeout — prevents hung connections.
+app.use((req, res, next) => {
+  req.setTimeout(REQUEST_TIMEOUT_MS);
+  res.setTimeout(REQUEST_TIMEOUT_MS, () => {
+    if (!res.headersSent) {
+      res.status(504).json({ error: "Превышено время ожидания запроса" });
+    }
+  });
+  next();
+});
 
 function parseCookieHeader(cookieHeader) {
   const out = {};
