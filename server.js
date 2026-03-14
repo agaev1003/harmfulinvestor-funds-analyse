@@ -180,10 +180,19 @@ function getApiCacheKey(req) {
   return qs ? `${req.path}?${qs}` : req.path;
 }
 
+function evictExpiredCacheEntries() {
+  const now = Date.now();
+  for (const [key, entry] of apiCache) {
+    if (!entry || !Number.isFinite(entry.expiresAt) || now > entry.expiresAt) {
+      apiCache.delete(key);
+    }
+  }
+}
+
 function getCachedJson(key) {
   const entry = apiCache.get(key);
   if (!entry) return null;
-  if (Date.now() > entry.expiresAt) {
+  if (!Number.isFinite(entry.expiresAt) || Date.now() > entry.expiresAt) {
     apiCache.delete(key);
     return null;
   }
@@ -193,8 +202,17 @@ function getCachedJson(key) {
 function setCachedJson(key, payload, ttlMs) {
   if (!Number.isFinite(ttlMs) || ttlMs <= 0) return;
   if (apiCache.size >= API_CACHE_MAX_ENTRIES) {
-    const oldestKey = apiCache.keys().next().value;
-    if (oldestKey) apiCache.delete(oldestKey);
+    // First evict all expired entries
+    evictExpiredCacheEntries();
+    // If still over limit, remove oldest entries (FIFO order of Map)
+    while (apiCache.size >= API_CACHE_MAX_ENTRIES) {
+      const oldestKey = apiCache.keys().next().value;
+      if (oldestKey != null) {
+        apiCache.delete(oldestKey);
+      } else {
+        break;
+      }
+    }
   }
   apiCache.set(key, { payload, expiresAt: Date.now() + ttlMs });
 }
@@ -254,8 +272,8 @@ function sanitizeStatusPayload(payload, strategiesSummary) {
     generatedAgeDays: toSafeNumber(source.generatedAgeDays),
     staleMarkDays: toSafeNumber(source.staleMarkDays),
     refreshing: {
-      market: Boolean(source.refreshing && source.refreshing.market),
-      compositions: Boolean(source.refreshing && source.refreshing.compositions),
+      market: Boolean(source.refreshing && typeof source.refreshing === "object" && source.refreshing.market),
+      compositions: Boolean(source.refreshing && typeof source.refreshing === "object" && source.refreshing.compositions),
     },
     market: {
       generatedAt: market.generatedAt || null,
@@ -334,8 +352,22 @@ function sanitizeCompositionsPayload(payload) {
 }
 
 function sanitizeStrategiesPayload(payload) {
+  if (Array.isArray(payload)) {
+    // Raw array passed — wrap it for consistent shape
+    return {
+      generatedAt: null,
+      loadedAt: null,
+      stale: false,
+      refreshing: false,
+      lastError: null,
+      total: payload.length,
+      activeCount: null,
+      tabCount: null,
+      failedDetailsCount: null,
+      items: payload,
+    };
+  }
   const source = payload && typeof payload === "object" ? payload : {};
-  if (Array.isArray(source)) return source;
   return {
     generatedAt: source.generatedAt || null,
     loadedAt: source.loadedAt || null,
@@ -352,11 +384,15 @@ function sanitizeStrategiesPayload(payload) {
 
 function isRefreshingStatusPayload(payload) {
   const source = payload && typeof payload === "object" ? payload : {};
+  const refreshing = source.refreshing && typeof source.refreshing === "object" ? source.refreshing : {};
+  const market = source.market && typeof source.market === "object" ? source.market : {};
+  const compositions = source.compositions && typeof source.compositions === "object" ? source.compositions : {};
+  const strategies = source.strategies && typeof source.strategies === "object" ? source.strategies : {};
   return Boolean(
-    (source.refreshing && (source.refreshing.market || source.refreshing.compositions)) ||
-      (source.market && source.market.refreshing) ||
-      (source.compositions && source.compositions.refreshing) ||
-      (source.strategies && source.strategies.refreshing)
+    refreshing.market || refreshing.compositions ||
+      market.refreshing ||
+      compositions.refreshing ||
+      strategies.refreshing
   );
 }
 
@@ -765,12 +801,19 @@ function startDailyScheduler() {
       schedulerState.lastRefreshDate = mskDate;
       console.log(`[scheduler] Daily refresh triggered (${mskDate} ${mskHour}:xx MSK)`);
 
-      // Refresh all three data sources in parallel
+      // Refresh all three data sources in parallel; reset date mark on failure
+      // so the scheduler retries on the next tick (5 min later).
       provider.getDataset().catch((err) => {
         console.warn(`[scheduler] Market refresh failed: ${String(err.message || err)}`);
+        if (schedulerState.lastRefreshDate === mskDate) {
+          schedulerState.lastRefreshDate = null;
+        }
       });
       provider.getCompositionsPayload({ forceRefresh: true }).catch((err) => {
         console.warn(`[scheduler] Compositions refresh failed: ${String(err.message || err)}`);
+        if (schedulerState.lastRefreshDate === mskDate) {
+          schedulerState.lastRefreshDate = null;
+        }
       });
       strategiesProvider.getStrategiesPayload({ forceRefresh: true }).catch((err) => {
         console.warn(`[scheduler] Strategies refresh failed: ${String(err.message || err)}`);
