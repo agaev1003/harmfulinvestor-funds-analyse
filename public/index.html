@@ -1011,7 +1011,7 @@ body {
   <button class="tab-btn strategies-tab" data-tab="strategies">Автоследование</button>
   <div class="top-right-status">
     <span class="update-pill" id="globalUpdateStatus">
-      <span class="update-pill-main" id="globalUpdateStatusMain">Обновлено: --</span>
+      <span class="update-pill-main" id="globalUpdateStatusMain">Данные загружаются…</span>
       <span class="update-pill-details" id="globalUpdateStatusDetails"></span>
     </span>
   </div>
@@ -1614,10 +1614,10 @@ function updateGlobalStatusPill(statusPayload) {
 
   if (!statusPayload || typeof statusPayload !== 'object') {
     if (mainEl && detailsEl) {
-      mainEl.textContent = 'Обновлено: --';
-      detailsEl.textContent = 'Статус недоступен';
+      mainEl.textContent = 'Данные загружаются…';
+      detailsEl.textContent = '';
     } else {
-      pillEl.textContent = 'Обновлено: --';
+      pillEl.textContent = 'Данные загружаются…';
     }
     pillEl.classList.remove('refreshing', 'stale');
     pillEl.title = '';
@@ -1686,44 +1686,47 @@ function updateGlobalStatusPill(statusPayload) {
       ? Number(statusPayload.generatedAgeDays)
       : null;
 
-  let line1 = `Обновлено: ${updatedAt ? formatDateTimeRu(updatedAt) : '--'}`;
+  // Main line — simple "Информация актуальна на {дата}"
+  const dateOnly = updatedAt ? formatDateHuman(updatedAt.slice(0, 10)) : null;
+  let line1 = dateOnly
+    ? `Информация актуальна на ${dateOnly}`
+    : 'Данные загружаются…';
   if (refreshing) line1 += ' · идёт обновление…';
 
+  // Details (shown on hover / expanded view)
   const marketChangesText = marketLatestDataDate ? formatDateHuman(marketLatestDataDate) : '--';
   const compositionChangesText = compositionsLatestDate ? formatDateHuman(compositionsLatestDate) : '--';
-  let line2 = `Данные: рынок ${marketChangesText} · состав ${compositionChangesText}`;
-  if (staleCount != null) line2 += ` · устарело ${staleMarkDays}+д: ${staleCount}`;
-  if (marketAgeDays != null && marketAgeDays >= 2) line2 += ` ⚠ рынок ${marketAgeDays}д без обновлений`;
+  const strategyUpdatedText = strategyUpdatedAt ? formatDateHuman(strategyUpdatedAt.slice(0, 10)) : '--';
 
   const marketState = marketRefreshing
     ? 'обновляется'
     : marketHasError
-      ? 'ошибка обновления'
+      ? 'ошибка'
       : marketFailureCount > 0
-        ? `частично (ошибок: ${marketFailureCount})`
+        ? `частично (${marketFailureCount})`
         : 'ок';
   const compositionState = compositionRefreshing
     ? 'обновляется'
     : compositionHasError
-      ? 'ошибка обновления'
+      ? 'ошибка'
       : compositionFailureCount > 0
-        ? `частично (ошибок: ${compositionFailureCount})`
+        ? `частично (${compositionFailureCount})`
         : 'ок';
   let strategyState = 'ок';
   if (strategyRefreshing) strategyState = 'обновляется';
   else if (strategyHardError) strategyState = 'ошибка';
-  else if (strategySoftError) strategyState = 'ошибка, показываем кэш';
-  else if (strategyFailureCount > 0) strategyState = `частично (ошибок: ${strategyFailureCount})`;
+  else if (strategySoftError) strategyState = 'кэш';
+  else if (strategyFailureCount > 0) strategyState = `частично (${strategyFailureCount})`;
 
-  const strategyUpdatedText = strategyUpdatedAt ? formatDateTimeRu(strategyUpdatedAt) : '--';
-  const line3 = `Статус: рынок ${marketState} · состав ${compositionState} · автослед ${strategyState} (${strategyUpdatedText})`;
-  const line4 = 'Авто-обновление: ежедневно в 10:00 МСК';
+  let line2 = `Рынок: ${marketChangesText} (${marketState}) · Составы: ${compositionChangesText} (${compositionState}) · Стратегии: ${strategyUpdatedText} (${strategyState})`;
+  if (marketAgeDays != null && marketAgeDays >= 2) line2 += ` · ⚠ рынок ${marketAgeDays}д`;
+  const line3 = 'Обновление: ежедневно в 10:00 МСК';
 
   if (mainEl && detailsEl) {
     mainEl.textContent = line1;
-    detailsEl.textContent = `${line2}\n${line3}\n${line4}`;
+    detailsEl.textContent = `${line2}\n${line3}`;
   } else {
-    pillEl.textContent = `${line1}\n${line2}\n${line3}\n${line4}`;
+    pillEl.textContent = `${line1}\n${line2}\n${line3}`;
   }
 
   pillEl.classList.toggle('refreshing', refreshing);
