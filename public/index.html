@@ -1720,13 +1720,23 @@ function updateGlobalStatusPill(statusPayload) {
 
   let line2 = `Рынок: ${marketChangesText} (${marketState}) · Составы: ${compositionChangesText} (${compositionState}) · Стратегии: ${strategyUpdatedText} (${strategyState})`;
   if (marketAgeDays != null && marketAgeDays >= 2) line2 += ` · ⚠ рынок ${marketAgeDays}д`;
-  const line3 = 'Обновление: ежедневно в 10:00 МСК';
 
+  // Show error details if any source has errors
+  const marketErrorText = (market && market.lastError && typeof market.lastError === 'string') ? market.lastError : null;
+  const compErrorText = (compositions && compositions.lastError && typeof compositions.lastError === 'string') ? compositions.lastError : null;
+  const errors = [
+    marketErrorText ? `Рынок: ${marketErrorText}` : null,
+    compErrorText ? `Составы: ${compErrorText}` : null,
+  ].filter(Boolean);
+  const line3 = errors.length ? `⚠ ${errors.join(' · ')}` : '';
+  const line4 = 'Обновление: ежедневно в 10:00 МСК';
+
+  const detailLines = [line2, line3, line4].filter(Boolean).join('\n');
   if (mainEl && detailsEl) {
     mainEl.textContent = line1;
-    detailsEl.textContent = `${line2}\n${line3}`;
+    detailsEl.textContent = detailLines;
   } else {
-    pillEl.textContent = `${line1}\n${line2}\n${line3}`;
+    pillEl.textContent = `${line1}\n${detailLines}`;
   }
 
   pillEl.classList.toggle('refreshing', refreshing);

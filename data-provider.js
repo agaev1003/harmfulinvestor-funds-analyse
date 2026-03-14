@@ -1292,6 +1292,7 @@ async function getDataset() {
       })
       .catch((error) => {
         if (state.marketBuildRunId === runId) {
+          state.marketLastError = String(error.message || error).slice(0, 300);
           if (
             resetDailyMarkOnFail &&
             state.datasetAutoRefreshDate === resetDailyMarkOnFail
@@ -1316,9 +1317,10 @@ async function getDataset() {
       if (state.buildPromise !== buildPromise) return;
       state.marketLastError = `main build watchdog timeout after ${MAIN_BUILD_TIMEOUT_MS}ms`;
       state.marketNextRetryAt = Date.now() + Math.max(10_000, BUILD_FAIL_BACKOFF_MS);
-      // Prevent infinite restart loop: bump loadedAt so data is not immediately stale.
+      // Bump loadedAt by backoff period only (not full CACHE_TTL) to prevent
+      // infinite restart loop while still allowing retry reasonably soon.
       if (state.dataset) {
-        state.loadedAt = Date.now();
+        state.loadedAt = Date.now() - CACHE_TTL_MS + BUILD_FAIL_BACKOFF_MS;
       }
       if (
         resetDailyMarkOnFail &&
@@ -1473,6 +1475,7 @@ async function getCompositionsDataset({ forceRefresh = false } = {}) {
       })
       .catch((error) => {
         if (state.compositionsBuildRunId === runId) {
+          state.compositionsLastError = String(error.message || error).slice(0, 300);
           if (
             resetDailyMarkOnFail &&
             state.compositionsAutoRefreshDate === resetDailyMarkOnFail
@@ -1504,9 +1507,9 @@ async function getCompositionsDataset({ forceRefresh = false } = {}) {
         state.compositionsNextRetryAt =
           Date.now() + Math.max(10_000, BUILD_FAIL_BACKOFF_MS);
       }
-      // Prevent infinite restart loop: bump loadedAt so data is not immediately stale.
+      // Bump by backoff period only (not full TTL) to allow retry soon.
       if (state.compositions) {
-        state.compositionsLoadedAt = Date.now();
+        state.compositionsLoadedAt = Date.now() - COMPOSITION_CACHE_TTL_MS + BUILD_FAIL_BACKOFF_MS;
       }
       if (
         resetDailyMarkOnFail &&
