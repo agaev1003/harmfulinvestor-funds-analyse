@@ -1591,10 +1591,28 @@ async function getCompositionsDataset({ forceRefresh = false } = {}) {
   return startCompositionsBuild();
 }
 
+// ── Non-blocking dataset accessor ───────────────────────────────────────────
+
+/**
+ * Returns cached dataset if available (from disk/seed/memory).
+ * Triggers a background build if missing but never blocks on it.
+ * Throws only when no cached data exists at all.
+ */
+async function getDatasetNonBlocking() {
+  await ensureDiskLoaded();
+  if (state.dataset) {
+    // Kick off a background refresh if stale, but don't wait
+    getDataset().catch(() => {});
+    return state.dataset;
+  }
+  // No cached data — must wait for initial build
+  return getDataset();
+}
+
 // ── Public API functions ────────────────────────────────────────────────────
 
 async function getFunds() {
-  const ds = await getDataset();
+  const ds = await getDatasetNonBlocking();
   return ds.funds.map((f) => ({
     id: f.id,
     ticker: f.ticker || null,
@@ -1610,7 +1628,7 @@ async function getFunds() {
 }
 
 async function getReturns() {
-  const ds = await getDataset();
+  const ds = await getDatasetNonBlocking();
   return ds.returns;
 }
 
@@ -1802,14 +1820,14 @@ async function getStatusSummary() {
 }
 
 async function getNavByFundId(fundId, from, to) {
-  const ds = await getDataset();
+  const ds = await getDatasetNonBlocking();
   const history = ds.historiesById[String(fundId)];
   if (!history) return null;
   return filterHistoryByRange(history, from, to);
 }
 
 async function getMarketData(rawFundType) {
-  const ds = await getDataset();
+  const ds = await getDatasetNonBlocking();
   const primaryFunds = ds.funds.filter(isPrimaryFund);
   const filteredFunds = filterByFundType(primaryFunds, rawFundType);
 
@@ -1839,7 +1857,7 @@ async function getMarketData(rawFundType) {
 }
 
 async function getMCDetail(mcName, rawFundType) {
-  const ds = await getDataset();
+  const ds = await getDatasetNonBlocking();
   const selectedMc = normalizeSpace(mcName || "");
   if (!selectedMc) {
     return { byType: { dates: [], data: {} }, byFund: { dates: [], data: {} }, topFundNames: [] };
