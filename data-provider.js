@@ -146,12 +146,12 @@ const RANKING_SCAN_TTL_MS = Number(
 const DAILY_MAIN_REFRESH_HOUR_MSK = Number(
   process.env.DAILY_MAIN_REFRESH_HOUR_MSK ||
     process.env.DAILY_REFRESH_HOUR_MSK ||
-    12
+    10
 );
 const DAILY_COMPOSITION_REFRESH_HOUR_MSK = Number(
   process.env.DAILY_COMPOSITION_REFRESH_HOUR_MSK ||
     process.env.DAILY_REFRESH_HOUR_MSK ||
-    12
+    10
 );
 const BUILD_FAIL_BACKOFF_MS = Number(
   process.env.BUILD_FAIL_BACKOFF_MS || (IS_RENDER ? 5 * 60 * 1000 : 60 * 1000)
@@ -1893,6 +1893,62 @@ async function getMCDetail(mcName, rawFundType) {
 
   return { byType, byFund, topFundNames };
 }
+
+// ── Proactive daily scheduler ────────────────────────────────────────────────
+// Runs every 5 minutes and triggers refresh at the configured MSK hour,
+// even if no HTTP requests come in.
+
+const SCHEDULER_INTERVAL_MS = 5 * 60 * 1000;
+
+function startDailyScheduler() {
+  const tick = async () => {
+    try {
+      const nowHourMsk = mskHour();
+      const todayMsk = mskDate();
+      if (nowHourMsk == null) return;
+
+      // Market data refresh
+      if (
+        DAILY_MAIN_REFRESH_HOUR_MSK >= 0 &&
+        nowHourMsk >= DAILY_MAIN_REFRESH_HOUR_MSK &&
+        state.datasetAutoRefreshDate !== todayMsk
+      ) {
+        await ensureDiskLoaded();
+        if (state.dataset) {
+          console.log(`[scheduler] Triggering daily market refresh (${todayMsk} ${nowHourMsk}:xx MSK)`);
+          getDataset().catch((err) => {
+            console.warn(`[scheduler] Market refresh failed: ${String(err.message || err)}`);
+          });
+        }
+      }
+
+      // Compositions refresh
+      if (
+        DAILY_COMPOSITION_REFRESH_HOUR_MSK >= 0 &&
+        nowHourMsk >= DAILY_COMPOSITION_REFRESH_HOUR_MSK &&
+        state.compositionsAutoRefreshDate !== todayMsk
+      ) {
+        await ensureCompositionDiskLoaded();
+        if (state.compositions) {
+          console.log(`[scheduler] Triggering daily compositions refresh (${todayMsk} ${nowHourMsk}:xx MSK)`);
+          getCompositionsDataset({ forceRefresh: false }).catch((err) => {
+            console.warn(`[scheduler] Compositions refresh failed: ${String(err.message || err)}`);
+          });
+        }
+      }
+    } catch (err) {
+      console.warn(`[scheduler] Tick error: ${String(err.message || err)}`);
+    }
+  };
+
+  const timer = setInterval(tick, SCHEDULER_INTERVAL_MS);
+  timer.unref(); // Don't prevent process exit
+  console.log(
+    `[scheduler] Daily auto-refresh scheduled at ${DAILY_MAIN_REFRESH_HOUR_MSK}:00 MSK (market) / ${DAILY_COMPOSITION_REFRESH_HOUR_MSK}:00 MSK (compositions)`
+  );
+}
+
+startDailyScheduler();
 
 module.exports = {
   getDataset,
