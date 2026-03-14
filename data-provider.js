@@ -1730,6 +1730,16 @@ function buildCompositionsMeta(ds) {
 }
 
 async function getCompositionsPayload({ forceRefresh = false } = {}) {
+  // Non-blocking: return seed/disk data immediately if available
+  await ensureCompositionDiskLoaded();
+  if (state.compositions && !forceRefresh) {
+    // Kick off background refresh if stale, but don't wait
+    getCompositionsDataset({ forceRefresh: false }).catch(() => {});
+    return {
+      items: Array.isArray(state.compositions.items) ? state.compositions.items : [],
+      meta: buildCompositionsMeta(state.compositions),
+    };
+  }
   const ds = await getCompositionsDataset({ forceRefresh });
   return {
     items: Array.isArray(ds.items) ? ds.items : [],
