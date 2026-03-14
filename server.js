@@ -55,6 +55,7 @@ const STARTUP_WARMUP_ENABLED =
     : !IS_APP_CONTAINER_DIR;
 const HEALTH_PATHS = new Set([
   "/api/healthz",
+  "/api/diag",
   "/healthz",
   "/health",
   "/ready",
