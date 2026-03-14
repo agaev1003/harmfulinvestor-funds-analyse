@@ -139,7 +139,8 @@ async function fetchJson(url, retries = STRATEGY_REQUEST_RETRIES, requestOptions
     } catch (error) {
       lastErr = error;
       if (attempt < retries) {
-        await new Promise((resolve) => setTimeout(resolve, STRATEGY_RETRY_DELAY_BASE_MS * (attempt + 1)));
+        const jitter = 0.75 + Math.random() * 0.5; // ±25% jitter
+        await new Promise((resolve) => setTimeout(resolve, Math.round(STRATEGY_RETRY_DELAY_BASE_MS * (attempt + 1) * jitter)));
       }
     }
   }

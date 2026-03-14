@@ -1,6 +1,5 @@
 const { app, BrowserWindow, dialog } = require("electron");
 const http = require("http");
-const net = require("net");
 const path = require("path");
 const { spawn } = require("child_process");
 
@@ -17,44 +16,29 @@ function getServerUrl() {
   return `http://127.0.0.1:${serverPort}`;
 }
 
-function resolveServerPort() {
-  if (Number.isFinite(serverPort) && serverPort > 0) return Promise.resolve();
-
-  return new Promise((resolve, reject) => {
-    const probe = net.createServer();
-    probe.unref();
-    probe.on("error", reject);
-    probe.listen(0, "127.0.0.1", () => {
-      const address = probe.address();
-      if (!address || typeof address === "string") {
-        probe.close(() => reject(new Error("Не удалось выбрать свободный порт")));
-        return;
-      }
-      serverPort = address.port;
-      probe.close(resolve);
-    });
-  });
-}
-
 async function startLocalServer() {
   if (serverProcess) return;
-  await resolveServerPort();
+  // Use PORT=0 to let the OS assign a free port, then read the actual
+  // port from the server's stdout. This eliminates the TOCTOU race
+  // where the probe-server port could be claimed by another process.
+  const usePort = (Number.isFinite(serverPort) && serverPort > 0)
+    ? serverPort
+    : 0;
   const serverPath = path.join(ROOT_DIR, "server.js");
   await new Promise((resolve, reject) => {
     const child = spawn(NODE_BIN, [serverPath], {
       cwd: ROOT_DIR,
       env: {
         ...process.env,
-        PORT: String(serverPort),
+        PORT: String(usePort),
+        HOST: "127.0.0.1",
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
 
     let settled = false;
     child.once("spawn", () => {
-      settled = true;
       serverProcess = child;
-      resolve();
     });
     child.once("error", (error) => {
       if (!settled) {
@@ -68,7 +52,18 @@ async function startLocalServer() {
     });
 
     child.stdout.on("data", (chunk) => {
-      process.stdout.write(`[server] ${chunk}`);
+      const text = String(chunk);
+      process.stdout.write(`[server] ${text}`);
+      // Parse the actual port from server output, e.g.:
+      // "Fund dashboard (independent): http://127.0.0.1:12345"
+      if (!settled) {
+        const portMatch = text.match(/:(\d{2,5})\s*$/m);
+        if (portMatch) {
+          serverPort = Number(portMatch[1]);
+          settled = true;
+          resolve();
+        }
+      }
     });
 
     child.stderr.on("data", (chunk) => {
@@ -82,7 +77,19 @@ async function startLocalServer() {
         );
       }
       serverProcess = null;
+      if (!settled) {
+        settled = true;
+        reject(new Error(`Server exited before listening (code=${code})`));
+      }
     });
+
+    // Timeout — if server doesn't print its URL within 15s, fail
+    setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        reject(new Error("Server did not start within 15 seconds"));
+      }
+    }, 15_000);
   });
 }
 

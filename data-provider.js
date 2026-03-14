@@ -403,15 +403,24 @@ async function buildCompositionsDataset({ forceRefresh = false } = {}) {
     await ensureDiskLoaded();
     // Use existing dataset directly to avoid blocking on a stuck market build.
     if (!state.dataset) {
-      await getDataset();
+      try {
+        await getDataset();
+      } catch (error) {
+        console.warn(
+          `[composition] Market data load failed, will use ranking IDs only: ${String(error.message || error)}`
+        );
+      }
     }
     const ds = state.dataset;
     if (!ds || !Array.isArray(ds.funds)) {
-      throw new Error("Нет данных по рынку для построения составов");
+      // Market data unavailable — proceed with ranking IDs only
+      // so compositions can still be built.
+      console.warn("[composition] No market dataset available, proceeding with ranking-only candidates");
     }
     const rankingIds = await fetchRankingFundIds();
+    const dsFunds = ds && Array.isArray(ds.funds) ? ds.funds : [];
     const candidatesById = new Map(
-      ds.funds.map((fund) => [
+      dsFunds.map((fund) => [
         String(fund.id),
         {
           id: Number(fund.id),
@@ -604,9 +613,19 @@ async function buildCompositionsDataset({ forceRefresh = false } = {}) {
         runStats.errorSamples.length > 0 && runStats.errorSamples[0].message
           ? `: ${runStats.errorSamples[0].message}`
           : "";
-      throw new Error(
-        `Не удалось обновить составы: все ${refreshCandidates.length} запросов завершились ошибкой${sampleMessage}`
-      );
+      // If we have previous data, log a warning but don't throw —
+      // return stale data instead of failing completely.
+      if (previousItems.length > 0) {
+        console.warn(
+          `[composition] All ${refreshCandidates.length} refresh requests failed${sampleMessage}. Returning previous data (${previousItems.length} items).`
+        );
+        state.compositionsLastError =
+          `Все ${refreshCandidates.length} запросов завершились ошибкой${sampleMessage}`;
+      } else {
+        throw new Error(
+          `Не удалось обновить составы: все ${refreshCandidates.length} запросов завершились ошибкой${sampleMessage}`
+        );
+      }
     }
 
     const runSnapshot = finalizeRun({ refreshedCount: refreshCandidates.length });
