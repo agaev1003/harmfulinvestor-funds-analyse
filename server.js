@@ -216,7 +216,9 @@ function toSafeNumber(value) {
 }
 
 function sanitizeErrorFlag(value) {
-  return value ? true : null;
+  if (!value) return null;
+  // Return truncated error message instead of just boolean
+  return typeof value === "string" ? value.slice(0, 200) : true;
 }
 
 function sanitizeProgressMeta(progress) {
@@ -541,6 +543,37 @@ app.get("/api/nav/:id", async (req, res) => {
   } catch (error) {
     sendApiError(res, 500, "Не удалось загрузить историю фонда", error);
   }
+});
+
+// Diagnostic endpoint — test connectivity to data sources
+app.get("/api/diag", async (req, res) => {
+  const results = {};
+  const testFetch = async (name, url) => {
+    const start = Date.now();
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10_000);
+      const r = await fetch(url, {
+        signal: controller.signal,
+        headers: { "user-agent": "fund-dashboard/1.0" },
+      });
+      clearTimeout(timer);
+      const ms = Date.now() - start;
+      results[name] = { ok: r.ok, status: r.status, ms };
+    } catch (err) {
+      const ms = Date.now() - start;
+      results[name] = { ok: false, error: String(err.message || err).slice(0, 200), ms };
+    }
+  };
+  await Promise.all([
+    testFetch("investfunds_list", "https://investfunds.ru/funds/?showID=54&limit=50&page=1"),
+    testFetch("investfunds_fund", "https://investfunds.ru/funds/4695/"),
+    testFetch("tbank_api", "https://www.tbank.ru/api/invest-gw/tracking/api/v1/strategy/catalog/tab"),
+  ]);
+  results.node_version = process.version;
+  results.platform = process.platform;
+  results.uptime_min = Math.round(process.uptime() / 60);
+  res.json(results);
 });
 
 app.get("/api/status", async (req, res) => {
