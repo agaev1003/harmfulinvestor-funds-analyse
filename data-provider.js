@@ -157,7 +157,7 @@ const BUILD_FAIL_BACKOFF_MS = Number(
   process.env.BUILD_FAIL_BACKOFF_MS || (IS_RENDER ? 5 * 60 * 1000 : 60 * 1000)
 );
 const MAIN_BUILD_TIMEOUT_MS = Number(
-  process.env.MAIN_BUILD_TIMEOUT_MS || (IS_RENDER ? 10 * 60 * 1000 : 15 * 60 * 1000)
+  process.env.MAIN_BUILD_TIMEOUT_MS || (IS_RENDER ? 25 * 60 * 1000 : 20 * 60 * 1000)
 );
 const COMPOSITION_BUILD_TIMEOUT_MS = Number(
   process.env.COMPOSITION_BUILD_TIMEOUT_MS ||
@@ -1315,23 +1315,13 @@ async function getDataset() {
     watchdog = setTimeout(() => {
       if (state.marketBuildRunId !== runId) return;
       if (state.buildPromise !== buildPromise) return;
-      state.marketLastError = `main build watchdog timeout after ${MAIN_BUILD_TIMEOUT_MS}ms`;
-      state.marketNextRetryAt = Date.now() + Math.max(10_000, BUILD_FAIL_BACKOFF_MS);
-      // Bump loadedAt by backoff period only (not full CACHE_TTL) to prevent
-      // infinite restart loop while still allowing retry reasonably soon.
-      if (state.dataset) {
-        state.loadedAt = Date.now() - CACHE_TTL_MS + BUILD_FAIL_BACKOFF_MS;
-      }
-      if (
-        resetDailyMarkOnFail &&
-        state.datasetAutoRefreshDate === resetDailyMarkOnFail
-      ) {
-        state.datasetAutoRefreshDate = null;
-      }
-      state.marketBuildState = null;
-      state.buildPromise = null;
+      // Log warning but do NOT reset buildPromise — let the build finish
+      // and save its data. Resetting buildPromise causes a new build to
+      // start with a new runId, which invalidates the current build's
+      // .then() handler (runId check fails → data discarded).
+      state.marketLastError = `main build slow: >${MAIN_BUILD_TIMEOUT_MS}ms (still running)`;
       console.warn(
-        `[data] Main build watchdog released stuck build after ${MAIN_BUILD_TIMEOUT_MS}ms`
+        `[data] Main build exceeds ${MAIN_BUILD_TIMEOUT_MS}ms — still running, waiting for completion`
       );
     }, MAIN_BUILD_TIMEOUT_MS + 1_000);
     if (typeof watchdog.unref === "function") watchdog.unref();
@@ -1502,25 +1492,9 @@ async function getCompositionsDataset({ forceRefresh = false } = {}) {
       if (state.compositionsBuildRunId !== runId) return;
       if (state.compositionsBuildPromise !== buildPromise) return;
       state.compositionsLastError =
-        `composition build watchdog timeout after ${COMPOSITION_BUILD_TIMEOUT_MS}ms`;
-      if (!force) {
-        state.compositionsNextRetryAt =
-          Date.now() + Math.max(10_000, BUILD_FAIL_BACKOFF_MS);
-      }
-      // Bump by backoff period only (not full TTL) to allow retry soon.
-      if (state.compositions) {
-        state.compositionsLoadedAt = Date.now() - COMPOSITION_CACHE_TTL_MS + BUILD_FAIL_BACKOFF_MS;
-      }
-      if (
-        resetDailyMarkOnFail &&
-        state.compositionsAutoRefreshDate === resetDailyMarkOnFail
-      ) {
-        state.compositionsAutoRefreshDate = null;
-      }
-      state.compositionsBuildState = null;
-      state.compositionsBuildPromise = null;
+        `composition build slow: >${COMPOSITION_BUILD_TIMEOUT_MS}ms (still running)`;
       console.warn(
-        `[composition] Build watchdog released stuck build after ${COMPOSITION_BUILD_TIMEOUT_MS}ms`
+        `[composition] Build exceeds ${COMPOSITION_BUILD_TIMEOUT_MS}ms — still running, waiting for completion`
       );
     }, COMPOSITION_BUILD_TIMEOUT_MS + 1_000);
     if (typeof watchdog.unref === "function") watchdog.unref();
