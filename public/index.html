@@ -3281,8 +3281,13 @@ async function openCompositionModalByFundId(fundId) {
   bodyEl.innerHTML = '<div class="loading">Загружаем состав фонда...</div>';
   modal.classList.add('open');
 
-  await loadCompositionData(false);
+  const loadedItems = await loadCompositionData(false);
   if (compositionModalFundId !== requestKey) return;
+
+  if (!compositionLoaded || !loadedItems || !loadedItems.length) {
+    bodyEl.innerHTML = '<div class="composition-empty">Не удалось загрузить данные о составах. Попробуйте обновить страницу.</div>';
+    return;
+  }
 
   const item = findCompositionByFundId(key);
   if (!item) {

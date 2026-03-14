@@ -243,3 +243,18 @@ test("parseInvestfundsStructureFromHtml extracts issuers", () => {
   assert.ok(lukoil, "should find Лукойл (stripped suffix)");
   assert.equal(lukoil.percent, 8.7);
 });
+
+test("parseInvestfundsStructureFromHtml fallback without data-modul", () => {
+  const html = fs.readFileSync(
+    path.join(FIXTURES, "fund-detail-no-datamodul.html"),
+    "utf8"
+  );
+  const result = parseInvestfundsStructureFromHtml(html);
+  assert.ok(result, "should return a result via fallback");
+  assert.equal(result.structure_date, "2026-02-20");
+  assert.equal(result.issuers.length, 3);
+
+  const vtb = result.issuers.find((i) => i.name.includes("Банк ВТБ"));
+  assert.ok(vtb, "should find Банк ВТБ");
+  assert.equal(vtb.percent, 9.15);
+});
