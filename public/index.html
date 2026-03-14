@@ -1687,42 +1687,43 @@ function updateGlobalStatusPill(statusPayload) {
       : null;
 
   let line1 = `Обновлено: ${updatedAt ? formatDateTimeRu(updatedAt) : '--'}`;
-  if (refreshing) line1 += ' · сейчас обновляем';
+  if (refreshing) line1 += ' · идёт обновление…';
 
   const marketChangesText = marketLatestDataDate ? formatDateHuman(marketLatestDataDate) : '--';
   const compositionChangesText = compositionsLatestDate ? formatDateHuman(compositionsLatestDate) : '--';
-  let line2 = `Последние изменения: рынок ${marketChangesText} · состав ${compositionChangesText}`;
-  if (staleCount != null) line2 += ` · фондов ${staleMarkDays}+д: ${staleCount}`;
-  if (marketAgeDays != null && marketAgeDays >= 2) line2 += ` · рынок не обновлялся ${marketAgeDays}д`;
+  let line2 = `Данные: рынок ${marketChangesText} · состав ${compositionChangesText}`;
+  if (staleCount != null) line2 += ` · устарело ${staleMarkDays}+д: ${staleCount}`;
+  if (marketAgeDays != null && marketAgeDays >= 2) line2 += ` ⚠ рынок ${marketAgeDays}д без обновлений`;
 
   const marketState = marketRefreshing
     ? 'обновляется'
     : marketHasError
-      ? 'ошибка'
+      ? 'ошибка обновления'
       : marketFailureCount > 0
-        ? `частично (${marketFailureCount})`
-        : 'актуально';
+        ? `частично (ошибок: ${marketFailureCount})`
+        : 'ок';
   const compositionState = compositionRefreshing
     ? 'обновляется'
     : compositionHasError
-      ? 'ошибка'
+      ? 'ошибка обновления'
       : compositionFailureCount > 0
-        ? `частично (${compositionFailureCount})`
-        : 'актуально';
-  let strategyState = 'актуально';
+        ? `частично (ошибок: ${compositionFailureCount})`
+        : 'ок';
+  let strategyState = 'ок';
   if (strategyRefreshing) strategyState = 'обновляется';
   else if (strategyHardError) strategyState = 'ошибка';
-  else if (strategySoftError) strategyState = 'временная ошибка, показываем кэш';
-  else if (strategyFailureCount > 0) strategyState = `частично (${strategyFailureCount})`;
+  else if (strategySoftError) strategyState = 'ошибка, показываем кэш';
+  else if (strategyFailureCount > 0) strategyState = `частично (ошибок: ${strategyFailureCount})`;
 
   const strategyUpdatedText = strategyUpdatedAt ? formatDateTimeRu(strategyUpdatedAt) : '--';
   const line3 = `Статус: рынок ${marketState} · состав ${compositionState} · автослед ${strategyState} (${strategyUpdatedText})`;
+  const line4 = 'Авто-обновление: ежедневно в 10:00 МСК';
 
   if (mainEl && detailsEl) {
     mainEl.textContent = line1;
-    detailsEl.textContent = `${line2}\n${line3}`;
+    detailsEl.textContent = `${line2}\n${line3}\n${line4}`;
   } else {
-    pillEl.textContent = `${line1}\n${line2}\n${line3}`;
+    pillEl.textContent = `${line1}\n${line2}\n${line3}\n${line4}`;
   }
 
   pillEl.classList.toggle('refreshing', refreshing);
