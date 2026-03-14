@@ -707,6 +707,51 @@ function startServer(port = PORT, host = HOST) {
   return server;
 }
 
+// ── Proactive daily scheduler ────────────────────────────────────────────────
+// Checks every 5 minutes; at 10:00 MSK triggers refresh of all data sources.
+
+const DAILY_REFRESH_HOUR_MSK = Number(process.env.DAILY_REFRESH_HOUR_MSK || 10);
+const SCHEDULER_INTERVAL_MS = 5 * 60 * 1000;
+const schedulerState = { lastRefreshDate: null };
+
+function startDailyScheduler() {
+  const tick = async () => {
+    try {
+      const now = new Date();
+      const mskHour = Number(
+        new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Moscow", hour: "2-digit", hour12: false }).format(now)
+      );
+      const mskDate = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Moscow" }).format(now);
+
+      if (DAILY_REFRESH_HOUR_MSK < 0) return;
+      if (!Number.isFinite(mskHour) || mskHour < DAILY_REFRESH_HOUR_MSK) return;
+      if (schedulerState.lastRefreshDate === mskDate) return;
+
+      schedulerState.lastRefreshDate = mskDate;
+      console.log(`[scheduler] Daily refresh triggered (${mskDate} ${mskHour}:xx MSK)`);
+
+      // Refresh all three data sources in parallel
+      provider.getDataset().catch((err) => {
+        console.warn(`[scheduler] Market refresh failed: ${String(err.message || err)}`);
+      });
+      provider.getCompositionsPayload({ forceRefresh: true }).catch((err) => {
+        console.warn(`[scheduler] Compositions refresh failed: ${String(err.message || err)}`);
+      });
+      strategiesProvider.getStrategiesPayload({ forceRefresh: true }).catch((err) => {
+        console.warn(`[scheduler] Strategies refresh failed: ${String(err.message || err)}`);
+      });
+    } catch (err) {
+      console.warn(`[scheduler] Tick error: ${String(err.message || err)}`);
+    }
+  };
+
+  const timer = setInterval(tick, SCHEDULER_INTERVAL_MS);
+  if (typeof timer.unref === "function") timer.unref();
+  console.log(`[scheduler] Daily auto-refresh: all sources at ${DAILY_REFRESH_HOUR_MSK}:00 MSK`);
+}
+
+startDailyScheduler();
+
 if (require.main === module) {
   startServer();
 }
