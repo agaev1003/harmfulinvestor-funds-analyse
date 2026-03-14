@@ -55,12 +55,13 @@ const STARTUP_WARMUP_ENABLED =
     : !IS_APP_CONTAINER_DIR;
 const HEALTH_PATHS = new Set([
   "/api/healthz",
-  "/api/diag",
   "/healthz",
   "/health",
   "/ready",
   "/live",
 ]);
+// /api/diag bypasses auth but has its own handler (not healthz)
+const AUTH_BYPASS_PATHS = new Set([...HEALTH_PATHS, "/api/diag"]);
 
 app.use(compression({ threshold: 1024 }));
 
@@ -129,7 +130,7 @@ function stripAccessQuery(urlString) {
 }
 
 function isHealthcheckPath(pathname) {
-  return HEALTH_PATHS.has(String(pathname || "").trim());
+  return AUTH_BYPASS_PATHS.has(String(pathname || "").trim());
 }
 
 app.use((req, res, next) => {
